@@ -11,7 +11,8 @@ on:
         required: true
         type: string
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
   validate-hacs:
@@ -19,14 +20,13 @@ jobs:
     runs-on: "ubuntu-latest"
     steps:
       - name: "Checkout the repository"
-        uses: "actions/checkout@main"
+        uses: "actions/checkout@v6"
 
       - name: "Run HACS validation"
         uses: "hacs/action@main"
-        env:
-          REPOSITORY_REF: "main"
         with:
           category: "integration"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           ignore: "brands topics description"
 
   validate-hassfest:
@@ -34,7 +34,7 @@ jobs:
     runs-on: "ubuntu-latest"
     steps:
       - name: "Checkout the repository"
-        uses: "actions/checkout@main"
+        uses: "actions/checkout@v6"
 
       - name: "Run HASSFest validation"
         uses: home-assistant/actions/hassfest@master
@@ -49,7 +49,7 @@ jobs:
       contents: write
     steps:
       - name: "Checkout the repository"
-        uses: "actions/checkout@main"
+        uses: "actions/checkout@v6"
 
       - name: "Resolve tag name"
         id: "meta"
@@ -85,3 +85,4 @@ jobs:
           generate_release_notes: true
           overwrite_files: true
           files: ${{ github.workspace }}/custom_components/bticino_companion/bticino_companion.zip
+          token: ${{ secrets.GITHUB_TOKEN }}
