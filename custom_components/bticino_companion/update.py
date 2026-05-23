@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from homeassistant.components.update import UpdateDeviceClass, UpdateEntity, UpdateEntityFeature
@@ -16,6 +17,10 @@ from .api import CompanionApiError
 from .device_info import build_device_info
 
 _IN_PROGRESS_STAGES = {"checking", "applying", "restarting", "rollback"}
+_UPDATE_APPLY_COMMAND_TIMEOUT_SECONDS = 120.0
+_UPDATE_APPLY_REQUEST_TIMEOUT_SECONDS = 90.0
+_UPDATE_APPLY_VERIFY_ATTEMPTS = 20
+_UPDATE_APPLY_VERIFY_DELAY_SECONDS = 1.0
 
 
 async def async_setup_entry(
@@ -117,18 +122,52 @@ class CompanionFirmwareUpdateEntity(CoordinatorEntity, UpdateEntity):
         if version is not None:
             raise HomeAssistantError("Installing a specific version is not supported.")
 
+        previous_version = self.installed_version
         try:
             await self.coordinator.async_run_command(
                 label="Update check",
                 command_coro_factory=self._client.async_update_check,
             )
-            await self.coordinator.async_run_command(
-                label="Update apply",
-                command_coro_factory=self._client.async_update_apply,
-            )
         except CompanionApiError as err:
             raise HomeAssistantError(str(err)) from err
+
+        target_version = self.latest_version
+        try:
+            await self.coordinator.async_run_command(
+                label="Update apply",
+                command_coro_factory=lambda: self._client.async_update_apply(
+                    request_timeout=_UPDATE_APPLY_REQUEST_TIMEOUT_SECONDS
+                ),
+                timeout_seconds=_UPDATE_APPLY_COMMAND_TIMEOUT_SECONDS,
+            )
+        except CompanionApiError as err:
+            if not await self._async_verify_apply_success(previous_version, target_version):
+                raise HomeAssistantError(str(err)) from err
         await self.coordinator.async_request_refresh()
+
+    async def _async_verify_apply_success(self, previous_version: str | None, target_version: str | None) -> bool:
+        """Treat transient apply transport errors as success if companion converged."""
+        prev = (previous_version or "").strip()
+        target = (target_version or "").strip()
+
+        for _ in range(_UPDATE_APPLY_VERIFY_ATTEMPTS):
+            await asyncio.sleep(_UPDATE_APPLY_VERIFY_DELAY_SECONDS)
+            try:
+                status = await self._client.async_get_update_status()
+            except CompanionApiError:
+                continue
+
+            stage = str(status.get("stage", "")).strip().lower()
+            if stage == "failed":
+                return False
+
+            current = str(status.get("current_version", "")).strip()
+            if target and current == target:
+                return True
+            if not target and prev and current and current != prev:
+                return True
+
+        return False
 
     @property
     def _update_control(self) -> dict[str, Any]:

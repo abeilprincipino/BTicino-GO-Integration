@@ -199,6 +199,7 @@ class CompanionApiClient:
         available_version: str | None = None,
         artifact_path: str | None = None,
         sha256: str | None = None,
+        request_timeout: float | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {}
         if available_version is not None:
@@ -212,6 +213,7 @@ class CompanionApiClient:
             "/api/v2/control/system/update/check",
             auth=True,
             json_body=payload or None,
+            request_timeout=request_timeout,
         )
 
     async def async_update_apply(
@@ -220,6 +222,7 @@ class CompanionApiClient:
         version: str | None = None,
         artifact_path: str | None = None,
         sha256: str | None = None,
+        request_timeout: float | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {}
         if version is not None:
@@ -233,6 +236,7 @@ class CompanionApiClient:
             "/api/v2/control/system/update/apply",
             auth=True,
             json_body=payload or None,
+            request_timeout=request_timeout,
         )
 
     async def async_update_rollback(self) -> dict[str, Any]:
@@ -361,6 +365,7 @@ class CompanionApiClient:
         *,
         auth: bool,
         json_body: dict[str, Any] | None = None,
+        request_timeout: float | None = None,
     ) -> dict[str, Any]:
         if auth and not self._access_token:
             raise CompanionAuthError("access token is required")
@@ -374,9 +379,12 @@ class CompanionApiClient:
             headers["Authorization"] = f"Bearer {self._access_token}"
 
         url = f"{self._base_url}{path}"
+        timeout_seconds = self._request_timeout
+        if request_timeout is not None:
+            timeout_seconds = max(0.1, float(request_timeout))
         for attempt in range(1, API_RETRY_ATTEMPTS + 1):
             try:
-                async with asyncio.timeout(self._request_timeout):
+                async with asyncio.timeout(timeout_seconds):
                     response = await self._session.request(
                         method,
                         url,
