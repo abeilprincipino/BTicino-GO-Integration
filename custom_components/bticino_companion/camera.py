@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -12,11 +13,13 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import IntegrationRuntime
+from .api import CompanionApiError
 from .const import CONF_COMPANION_URL, DEFAULT_COMPANION_URL
 from .coordinator import CompanionCoordinator
 from .device_info import build_device_info
 
 _DEFAULT_RTSP_PORT = 8554
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -87,6 +90,7 @@ class CompanionEntrypointCamera(CoordinatorEntity[CompanionCoordinator], Camera)
         self._entry = entry
         self._entrypoint_id = entrypoint_id
         self._devaddr = devaddr
+        self._client = entry.runtime_data.client
         self._companion_url = str(entry.options.get(CONF_COMPANION_URL, entry.data.get(CONF_COMPANION_URL, DEFAULT_COMPANION_URL))).strip()
         self._attr_name = entrypoint_label
         self._attr_unique_id = f"{entry.entry_id}_entrypoint_camera_{entrypoint_id}"
@@ -121,7 +125,12 @@ class CompanionEntrypointCamera(CoordinatorEntity[CompanionCoordinator], Camera)
         return _build_rtsp_stream_url(self._companion_url, self.coordinator.data, self._entrypoint_id)
 
     async def async_camera_image(self, width: int | None = None, height: int | None = None) -> bytes | None:
-        return None
+        del width, height
+        try:
+            return await self._client.async_entrypoint_snapshot_latest(self._entrypoint_id)
+        except CompanionApiError as err:
+            _LOGGER.debug("Snapshot latest fallback failed for %s: %s", self._entrypoint_id, err)
+            return None
 
 
 def _build_rtsp_stream_url(companion_url: str, data: dict[str, Any] | None, entrypoint_id: str) -> str | None:

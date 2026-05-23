@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import IntegrationRuntime
-from .api import CompanionApiClient
+from .api import CompanionApiClient, CompanionApiError
 from .coordinator import CompanionCoordinator
 from .device_info import build_device_info
+
+_COMPANION_RESTART_VERIFY_ATTEMPTS = 30
+_COMPANION_RESTART_VERIFY_DELAY_SECONDS = 1.0
 
 
 async def async_setup_entry(
@@ -239,7 +244,52 @@ class CompanionSystemServiceRestartButton(CoordinatorEntity[CompanionCoordinator
         return {"service": self._service_name}
 
     async def async_press(self) -> None:
+        if self._service_name == "companion":
+            await self._async_press_companion_restart()
+            return
+
         await self.coordinator.async_run_command(
             label=f"System service restart ({self._service_name})",
             command_coro_factory=lambda: self._client.async_system_service_restart(self._service_name),
         )
+
+    async def _async_press_companion_restart(self) -> None:
+        previous_boot_time = self._current_boot_time()
+        try:
+            await self.coordinator.async_run_command(
+                label="System service restart (companion)",
+                command_coro_factory=lambda: self._client.async_system_service_restart(self._service_name),
+            )
+            return
+        except CompanionApiError as err:
+            if not await self._async_verify_companion_restart(previous_boot_time):
+                raise HomeAssistantError(str(err)) from err
+
+        await self.coordinator.async_restart_event_stream()
+        await self.coordinator.async_request_refresh()
+
+    async def _async_verify_companion_restart(self, previous_boot_time: str) -> bool:
+        saw_disconnect = False
+        for _ in range(_COMPANION_RESTART_VERIFY_ATTEMPTS):
+            await asyncio.sleep(_COMPANION_RESTART_VERIFY_DELAY_SECONDS)
+            try:
+                health = await self._client.async_get_health()
+            except CompanionApiError:
+                saw_disconnect = True
+                continue
+
+            if not isinstance(health, dict):
+                continue
+            current_boot_time = str(health.get("boot_time", "")).strip()
+            if previous_boot_time and current_boot_time and current_boot_time != previous_boot_time:
+                return True
+            if not previous_boot_time and saw_disconnect:
+                return True
+        return False
+
+    def _current_boot_time(self) -> str:
+        data = self.coordinator.data if isinstance(self.coordinator.data, dict) else {}
+        health = data.get("health", {}) if isinstance(data, dict) else {}
+        if not isinstance(health, dict):
+            return ""
+        return str(health.get("boot_time", "")).strip()

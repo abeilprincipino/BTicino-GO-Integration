@@ -170,6 +170,20 @@ class CompanionApiClient:
             auth=True,
         )
 
+    async def async_entrypoint_snapshot_capture(self, entrypoint_id: str) -> bytes:
+        return await self._async_request_bytes(
+            "POST",
+            f"/api/v2/control/entrypoints/{entrypoint_id}/snapshot",
+            auth=True,
+        )
+
+    async def async_entrypoint_snapshot_latest(self, entrypoint_id: str) -> bytes:
+        return await self._async_request_bytes(
+            "GET",
+            f"/api/v2/entrypoints/{entrypoint_id}/snapshot/latest.jpg",
+            auth=True,
+        )
+
     async def async_system_reboot(self) -> dict[str, Any]:
         return await self._async_request("POST", "/api/v2/control/system/reboot", auth=True)
 
@@ -433,6 +447,81 @@ class CompanionApiClient:
 
             if not isinstance(payload, dict):
                 raise CompanionApiError("companion returned non-object payload")
+            return payload
+
+        raise CompanionApiError(f"request retries exhausted for {url}")
+
+    async def _async_request_bytes(
+        self,
+        method: str,
+        path: str,
+        *,
+        auth: bool,
+        request_timeout: float | None = None,
+    ) -> bytes:
+        if auth and not self._access_token:
+            raise CompanionAuthError("access token is required")
+
+        headers = {
+            "Accept": "image/jpeg",
+        }
+        if auth:
+            headers["Authorization"] = f"Bearer {self._access_token}"
+
+        url = f"{self._base_url}{path}"
+        timeout_seconds = self._request_timeout
+        if request_timeout is not None:
+            timeout_seconds = max(0.1, float(request_timeout))
+
+        for attempt in range(1, API_RETRY_ATTEMPTS + 1):
+            try:
+                async with asyncio.timeout(timeout_seconds):
+                    response = await self._session.request(
+                        method,
+                        url,
+                        headers=headers,
+                        ssl=self._verify_ssl,
+                    )
+            except (
+                ClientConnectorDNSError,
+                ClientConnectionError,
+                ServerTimeoutError,
+                asyncio.TimeoutError,
+                OSError,
+            ) as err:
+                if attempt >= API_RETRY_ATTEMPTS:
+                    raise CompanionApiError(f"network error while requesting {url}") from err
+                await asyncio.sleep(API_RETRY_BASE_DELAY_SECONDS * attempt)
+                continue
+            except ClientError as err:
+                raise CompanionApiError(f"http client error while requesting {url}") from err
+
+            if response.status >= 400:
+                payload: Any
+                try:
+                    payload = await response.json(content_type=None)
+                except Exception:  # noqa: BLE001
+                    payload = {}
+                parsed = self._parse_error(payload, response.status)
+                if response.status in (401, 403):
+                    raise CompanionAuthError(
+                        parsed["message"],
+                        code=parsed["code"],
+                        status=parsed["status"],
+                        retryable=parsed["retryable"],
+                        retry_after=parsed["retry_after"],
+                    )
+                raise CompanionApiError(
+                    parsed["message"],
+                    code=parsed["code"],
+                    status=parsed["status"],
+                    retryable=parsed["retryable"],
+                    retry_after=parsed["retry_after"],
+                )
+
+            payload = await response.read()
+            if not payload:
+                raise CompanionApiError("companion returned empty image payload")
             return payload
 
         raise CompanionApiError(f"request retries exhausted for {url}")
