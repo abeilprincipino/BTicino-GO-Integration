@@ -225,7 +225,7 @@ class TypedControlTest(unittest.IsolatedAsyncioTestCase):
         await camera.async_handle_async_webrtc_offer("offer-sdp", "session-1", send_message)
 
         entry.runtime_data.client.async_webrtc_offer.assert_awaited_once_with(
-            entrypoint_id="main", offer_sdp="offer-sdp", session_id="session-1", origin="native_camera"
+            entrypoint_id="main", offer_sdp="offer-sdp", session_id="session-1", origin="native_camera", ice_servers=[]
         )
         self.assertEqual(send_message.call_args.args[0].answer, "answer-sdp")
         self.assertTrue(camera.available)

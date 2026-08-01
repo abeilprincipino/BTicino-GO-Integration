@@ -128,6 +128,7 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
                 offer_sdp=offer_sdp,
                 session_id=session_id,
                 origin=origin,
+                ice_servers=await self._async_ice_servers(),
             )
         except CompanionApiError:
             self._active_webrtc_sessions.discard(session_id)
@@ -142,6 +143,33 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
                 _LOGGER.debug("Unable to close invalid Companion WebRTC session %s", session_id)
             raise ValueError("Companion returned an empty answer_sdp")
         return answer_sdp
+
+    async def _async_ice_servers(self) -> list[dict[str, Any]]:
+        """Reuse Home Assistant's resolved ICE servers (incl. Nabu Casa Cloud TURN) for the Companion peer.
+
+        Companion cannot reach Home Assistant Cloud or read configuration.yaml itself, so it
+        needs these forwarded per-offer; without them it only gathers LAN host candidates and
+        remote clients (e.g. cellular) cannot reach it.
+        """
+        try:
+            client_config = await self.async_get_webrtc_client_configuration()
+        except Exception as err:  # noqa: BLE001 - never block the offer on ICE server discovery
+            _LOGGER.debug("Unable to resolve WebRTC ICE servers for %s: %s", self._entrypoint_id, err)
+            return []
+
+        servers: list[dict[str, Any]] = []
+        for server in client_config.configuration.ice_servers:
+            urls = server.urls if isinstance(server.urls, list) else [server.urls]
+            urls = [url for url in urls if url]
+            if not urls:
+                continue
+            payload: dict[str, Any] = {"urls": urls}
+            if server.username:
+                payload["username"] = server.username
+            if server.credential:
+                payload["credential"] = server.credential
+            servers.append(payload)
+        return servers
 
     async def async_on_webrtc_candidate(
         self, session_id: str, candidate: RTCIceCandidateInit

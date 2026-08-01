@@ -138,7 +138,13 @@ class CompanionApiClient:
         )
 
     async def async_webrtc_offer(
-        self, *, entrypoint_id: str, offer_sdp: str, session_id: str, origin: str
+        self,
+        *,
+        entrypoint_id: str,
+        offer_sdp: str,
+        session_id: str,
+        origin: str,
+        ice_servers: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Open a session-scoped WebRTC signaling socket and submit its offer."""
         if not self._access_token:
@@ -161,6 +167,7 @@ class CompanionApiClient:
                     "entrypoint_id": entrypoint_id,
                     "origin": origin,
                     "offer_sdp": offer_sdp,
+                    "ice_servers": ice_servers or [],
                 },
             )
             return response
