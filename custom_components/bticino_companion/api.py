@@ -15,6 +15,8 @@ from .const import (
     API_PATH_RECOVER_BEARER,
     API_PATH_AUDIO_MUTE,
     API_PATH_AUDIO_UNMUTE,
+    API_PATH_CALL_ANSWER,
+    API_PATH_CALL_HANGUP,
     API_PATH_AUTH_STATUS,
     API_PATH_ENTRYPOINT_UNLOCK,
     API_PATH_SYSTEM_REBOOT,
@@ -117,6 +119,14 @@ class CompanionApiClient:
         return await self._async_request(
             "POST", API_PATH_ENTRYPOINT_UNLOCK.format(entrypoint_id=quote(entrypoint_id, safe="")), auth=True
         )
+
+    async def async_call_answer(self) -> dict[str, Any]:
+        """Answer the call currently ringing on Companion."""
+        return await self._async_request("POST", API_PATH_CALL_ANSWER, auth=True)
+
+    async def async_call_hangup(self) -> dict[str, Any]:
+        """End the active call. Safe to call when no call is up."""
+        return await self._async_request("POST", API_PATH_CALL_HANGUP, auth=True)
 
     async def async_set_muted(self, muted: bool) -> dict[str, Any]:
         return await self._async_request("POST", API_PATH_AUDIO_MUTE if muted else API_PATH_AUDIO_UNMUTE, auth=True)
