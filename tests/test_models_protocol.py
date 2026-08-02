@@ -105,6 +105,33 @@ class ModelsTest(unittest.TestCase):
         self.assertEqual(state.firmware, "2.3.4")
         self.assertEqual(state.hardware, "rev-b")
 
+    def test_state_reads_last_call_end_reason(self) -> None:
+        state = CompanionState.from_dict(
+            {
+                "call_state": "ringing",
+                "physical_ring": {"entrypoint_id": "main"},
+                "last_incoming_call_end": {"dialog_id": "d1", "reason": "elsewhere"},
+            }
+        )
+
+        self.assertEqual(state.last_call_end_reason, "elsewhere")
+
+    def test_state_without_call_end_reason_is_none(self) -> None:
+        state = CompanionState.from_dict({"call_state": "idle"})
+
+        self.assertIsNone(state.last_call_end_reason)
+
+    def test_incoming_dialog_id_marks_an_answerable_call(self) -> None:
+        state = CompanionState.from_dict(
+            {
+                "call_state": "ringing",
+                "incoming_call": {"dialog_id": "abc@domain", "entrypoint_id": "main"},
+            }
+        )
+
+        self.assertEqual(state.incoming_dialog_id, "abc@domain")
+        self.assertEqual(state.call_state, "ringing")
+
 
 class ProtocolTest(unittest.TestCase):
     def test_ping_message(self) -> None:

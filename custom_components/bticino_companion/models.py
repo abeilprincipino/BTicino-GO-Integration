@@ -158,6 +158,7 @@ class CompanionState:
     active_entrypoint_id: str | None = None
     incoming_dialog_id: str | None = None
     active_dialog_id: str | None = None
+    last_call_end_reason: str | None = None
     preview_stream_id: str | None = None
     entrypoints: tuple[Entrypoint, ...] = ()
     muted: bool = False
@@ -175,6 +176,7 @@ class CompanionState:
         physical_ring = mapping_at(payload, "physical_ring")
         incoming_call = mapping_at(payload, "incoming_call")
         active_call = mapping_at(payload, "active_call")
+        last_call_end = mapping_at(payload, "last_incoming_call_end")
         preview_stream = mapping_at(payload, "preview_stream")
         entrypoint_id = next(
             (
@@ -200,6 +202,7 @@ class CompanionState:
             active_entrypoint_id=entrypoint_id,
             incoming_dialog_id=_optional_string(incoming_call.get("dialog_id")),
             active_dialog_id=_optional_string(active_call.get("dialog_id")),
+            last_call_end_reason=_optional_string(last_call_end.get("reason")),
             preview_stream_id=_optional_string(preview_stream.get("stream_id")),
             entrypoints=entrypoints,
             muted=bool(audio.get("muted", payload.get("muted", False))),

@@ -99,6 +99,15 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
             "bticino_call_state": call_state,
             "bticino_is_active_entrypoint": active,
             "bticino_is_ringing": call_state == "ringing",
+            # An answerable call requires a real SIP dialog. Without Flexisip
+            # provisioning no INVITE arrives, incoming_dialog_id stays unset and
+            # the card must not offer an Answer button that cannot work.
+            "bticino_can_answer": bool(
+                active and call_state == "ringing" and state and state.incoming_dialog_id
+            ),
+            "bticino_answered_elsewhere": bool(
+                active and state and state.last_call_end_reason == "elsewhere"
+            ),
         }
 
     async def async_handle_async_webrtc_offer(
