@@ -289,7 +289,16 @@ class BTicinoGoIntercomCard extends HTMLElement {
     const callState = this._callState();
     const remoteActive = callState === "active" || callState === "preview";
     const canAnswer = this._canAnswer() && !active;
+    // inCall is read from the camera's own state, not from this card's session,
+    // so it still holds when _start() has failed on an answered call: _cleanup()
+    // drops _pc and clears _connecting, and the _render() at the tail of _start()
+    // then sees active false but inCall true. That is the one case where the end
+    // button has to be shown without a local session behind it — the SIP call is
+    // up on the companion, and without the button there is nothing left that can
+    // hang it up: every later preview would return without dialling and every
+    // later inbound call would be answered busy, until the companion restarts.
     const inCall = callState === "active";
+    const canEnd = active || inCall;
     const status = this._elsewhereUntil
       ? ["Answered elsewhere", "idle"]
       : this._connecting
@@ -325,7 +334,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
         <div class="ring-overlay ${ringing && !active ? "" : "hidden"}"><div class="ring-pulse"></div><div class="ring-label">${this._escape(entrypoint)}</div><div>Incoming call</div></div>
       </div><div class="controls">
         <button class="call ${active || (ringing && !canAnswer) ? "hidden" : ""}" title="${canAnswer ? "Answer" : "Start live view"}"><ha-icon icon="mdi:phone"></ha-icon></button>
-        <button class="end ${active ? "" : "hidden"}" title="${inCall ? "Hang up" : "End live view"}"><ha-icon icon="mdi:phone-hangup"></ha-icon></button>
+        <button class="end ${canEnd ? "" : "hidden"}" title="${inCall ? "Hang up" : "End live view"}"><ha-icon icon="mdi:phone-hangup"></ha-icon></button>
         <button class="mute ${this._connected && this._micTrack ? "" : "hidden"}" title="${this._muted ? "Unmute" : "Mute"}"><ha-icon icon="${this._muted ? "mdi:microphone-off" : "mdi:microphone"}"></ha-icon></button>
         <button class="unlock" title="Unlock"><ha-icon icon="mdi:lock-open"></ha-icon></button>
        </div><div class="error ${this._error ? "" : "hidden"}">${this._escape(this._error)}</div></ha-card>`;
