@@ -14,6 +14,8 @@ class BTicinoGoIntercomCard extends HTMLElement {
     this._connected = false;
     this._muted = false;
     this._error = "";
+    this._elsewhereUntil = 0;
+    this._elsewhereLatched = false;
   }
 
   setConfig(config) {
@@ -27,6 +29,19 @@ class BTicinoGoIntercomCard extends HTMLElement {
     if (this._pc || this._connecting) {
       this._attachVideo();
       return;
+    }
+    // The companion keeps last_incoming_call_end set until the next call starts,
+    // so the notice is latched once per call-end: it stays suppressed while the
+    // attribute remains true and re-arms only after it has gone back to false.
+    if (this._answeredElsewhere()) {
+      if (!this._elsewhereLatched) {
+        this._elsewhereLatched = true;
+        this._elsewhereUntil = Date.now() + 4000;
+        setTimeout(() => { this._elsewhereUntil = 0; this._render(); }, 4000);
+      }
+    } else {
+      this._elsewhereLatched = false;
+      this._elsewhereUntil = 0;
     }
     this._render();
     this._attachVideo();
@@ -60,6 +75,14 @@ class BTicinoGoIntercomCard extends HTMLElement {
 
   _isRinging() {
     return this._cameraState()?.attributes?.bticino_is_ringing === true;
+  }
+
+  _canAnswer() {
+    return this._cameraState()?.attributes?.bticino_can_answer === true;
+  }
+
+  _answeredElsewhere() {
+    return this._cameraState()?.attributes?.bticino_answered_elsewhere === true;
   }
 
   _send(type, payload) {
@@ -202,6 +225,28 @@ class BTicinoGoIntercomCard extends HTMLElement {
     await this._send("bticino_companion/card_unlock", {});
   }
 
+  async _answer() {
+    this._error = "";
+    this._render();
+    try {
+      await this._send("bticino_companion/card_call_answer", {});
+    } catch (err) {
+      this._error = err?.message || String(err);
+      this._render();
+      return;
+    }
+    await this._start();
+  }
+
+  async _hangup() {
+    try {
+      await this._send("bticino_companion/card_call_hangup", {});
+    } catch (err) {
+      this._error = err?.message || String(err);
+    }
+    this._end();
+  }
+
   _cleanup() {
     const sessionId = this._sessionId;
     this._sessionId = undefined;
@@ -243,7 +288,11 @@ class BTicinoGoIntercomCard extends HTMLElement {
     const active = !!this._pc || this._connecting;
     const callState = this._callState();
     const remoteActive = callState === "active" || callState === "preview";
-    const status = this._connecting
+    const canAnswer = this._canAnswer() && !active;
+    const inCall = callState === "active";
+    const status = this._elsewhereUntil
+      ? ["Answered elsewhere", "idle"]
+      : this._connecting
       ? ["Connecting", "connecting"]
         : this._connected
           ? [this._muted ? "Muted" : "Connected", "active"]
@@ -275,13 +324,13 @@ class BTicinoGoIntercomCard extends HTMLElement {
         <video class="${this._connected ? "" : "hidden"}" playsinline autoplay></video>
         <div class="ring-overlay ${ringing && !active ? "" : "hidden"}"><div class="ring-pulse"></div><div class="ring-label">${this._escape(entrypoint)}</div><div>Incoming call</div></div>
       </div><div class="controls">
-        <button class="call ${active || ringing ? "hidden" : ""}" title="Start live view"><ha-icon icon="mdi:phone"></ha-icon></button>
-        <button class="end ${active ? "" : "hidden"}" title="End live view"><ha-icon icon="mdi:phone-hangup"></ha-icon></button>
+        <button class="call ${active || (ringing && !canAnswer) ? "hidden" : ""}" title="${canAnswer ? "Answer" : "Start live view"}"><ha-icon icon="mdi:phone"></ha-icon></button>
+        <button class="end ${active ? "" : "hidden"}" title="${inCall ? "Hang up" : "End live view"}"><ha-icon icon="mdi:phone-hangup"></ha-icon></button>
         <button class="mute ${this._connected && this._micTrack ? "" : "hidden"}" title="${this._muted ? "Unmute" : "Mute"}"><ha-icon icon="${this._muted ? "mdi:microphone-off" : "mdi:microphone"}"></ha-icon></button>
         <button class="unlock" title="Unlock"><ha-icon icon="mdi:lock-open"></ha-icon></button>
        </div><div class="error ${this._error ? "" : "hidden"}">${this._escape(this._error)}</div></ha-card>`;
-    this.shadowRoot.querySelector(".call")?.addEventListener("click", () => this._start());
-    this.shadowRoot.querySelector(".end")?.addEventListener("click", () => this._end());
+    this.shadowRoot.querySelector(".call")?.addEventListener("click", () => (canAnswer ? this._answer() : this._start()));
+    this.shadowRoot.querySelector(".end")?.addEventListener("click", () => (inCall ? this._hangup() : this._end()));
     this.shadowRoot.querySelector(".mute")?.addEventListener("click", () => this._toggleMute());
     this.shadowRoot.querySelector(".unlock")?.addEventListener("click", () => this._unlock().catch((err) => { this._error = err.message; this._render(); }));
     if (this._connected) this._attachVideo();
