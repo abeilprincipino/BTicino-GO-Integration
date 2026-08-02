@@ -20,6 +20,8 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, _handle_candidate)
     websocket_api.async_register_command(hass, _handle_close)
     websocket_api.async_register_command(hass, _handle_unlock)
+    websocket_api.async_register_command(hass, _handle_call_answer)
+    websocket_api.async_register_command(hass, _handle_call_hangup)
 
 
 def _camera_for_message(hass: HomeAssistant, msg: dict[str, Any]):
@@ -109,5 +111,41 @@ async def _handle_unlock(hass: HomeAssistant, connection, msg: dict[str, Any]) -
         await _camera_for_message(hass, msg).async_handle_card_unlock()
     except (CompanionApiError, HomeAssistantError, ValueError) as err:
         connection.send_error(msg["id"], "unlock_failed", str(err))
+        return
+    connection.send_result(msg["id"])
+
+
+@callback
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "bticino_companion/card_call_answer",
+        vol.Required("camera_entity_id"): str,
+    }
+)
+@websocket_api.async_response
+async def _handle_call_answer(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Answer the ringing call for the card's camera."""
+    try:
+        await _camera_for_message(hass, msg).async_handle_card_call_answer()
+    except (CompanionApiError, HomeAssistantError, ValueError) as err:
+        connection.send_error(msg["id"], "call_answer_failed", str(err))
+        return
+    connection.send_result(msg["id"])
+
+
+@callback
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "bticino_companion/card_call_hangup",
+        vol.Required("camera_entity_id"): str,
+    }
+)
+@websocket_api.async_response
+async def _handle_call_hangup(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """End the active call for the card's camera."""
+    try:
+        await _camera_for_message(hass, msg).async_handle_card_call_hangup()
+    except (CompanionApiError, HomeAssistantError, ValueError) as err:
+        connection.send_error(msg["id"], "call_hangup_failed", str(err))
         return
     connection.send_result(msg["id"])

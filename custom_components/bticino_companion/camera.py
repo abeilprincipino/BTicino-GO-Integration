@@ -196,6 +196,14 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
         """Unlock the entrypoint represented by this camera."""
         await self._client.async_unlock_entrypoint(self._entrypoint_id)
 
+    async def async_handle_card_call_answer(self) -> None:
+        """Answer the call ringing on this camera's entrypoint."""
+        await self._client.async_call_answer()
+
+    async def async_handle_card_call_hangup(self) -> None:
+        """End the active call. Idempotent on the Companion side."""
+        await self._client.async_call_hangup()
+
     async def async_close_card_webrtc_session(self, session_id: str) -> None:
         """Close a bundled-card session only when it belongs to this camera."""
         if session_id not in self._active_webrtc_sessions:
