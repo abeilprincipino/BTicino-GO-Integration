@@ -21,6 +21,9 @@ class BTicinoGoIntercomCard extends HTMLElement {
     this._preview = false;
     this._previewTried = false;
     this._audioSender = undefined;
+    // True while _answerPreview runs, so set hass does not mistake our own answer
+    // for one made by another client.
+    this._answering = false;
   }
 
   setConfig(config) {
@@ -38,6 +41,19 @@ class BTicinoGoIntercomCard extends HTMLElement {
       this._end();
     }
     if (this._pc || this._connecting) {
+      // The call was answered through the companion by another client: the lease
+      // is promoted, so the session stays (closing it would end the call) and
+      // becomes the call. No user gesture is available, so the microphone is
+      // attached only if its permission was already granted.
+      if (this._preview && !this._answering && this._callState() === "active") {
+        this._preview = false;
+        // Still connecting means no transceiver to fill yet: nothing to attach.
+        const pc = this._pc;
+        if (pc && navigator.mediaDevices?.getUserMedia) {
+          this._attachMicrophone(pc, navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => undefined));
+        }
+        this._render();
+      }
       this._attachVideo();
       return;
     }
@@ -166,12 +182,22 @@ class BTicinoGoIntercomCard extends HTMLElement {
     this._preview = preview;
     this._error = "";
     this._render();
+    // Declared outside the try so the catch can tell a teardown from a failure.
+    let sessionId;
     try {
       this._sessionId = this._newSessionId();
+      // Every await below can outlive the session (the ring ends, the card is
+      // removed): a changed id means it was torn down and nothing may go on.
+      sessionId = this._sessionId;
       this._remoteStream = new MediaStream();
       if (!preview && navigator.mediaDevices?.getUserMedia) {
         try {
-          this._localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          if (this._sessionId !== sessionId) {
+            stream.getTracks().forEach((track) => track.stop());
+            return;
+          }
+          this._localStream = stream;
           this._micTrack = this._localStream.getAudioTracks()[0];
           this._micTrack.enabled = false;
         } catch {
@@ -180,7 +206,9 @@ class BTicinoGoIntercomCard extends HTMLElement {
         }
       }
 
-      const pc = new RTCPeerConnection(await this._fetchRtcConfiguration());
+      const configuration = await this._fetchRtcConfiguration();
+      if (this._sessionId !== sessionId) return;
+      const pc = new RTCPeerConnection(configuration);
       this._pc = pc;
       pc.ontrack = (event) => {
         for (const track of event.streams[0]?.getTracks() || [event.track]) {
@@ -220,23 +248,36 @@ class BTicinoGoIntercomCard extends HTMLElement {
       }
       pc.addTransceiver("video", { direction: "recvonly" });
       const offer = await pc.createOffer();
+      if (this._sessionId !== sessionId) return;
       await pc.setLocalDescription(offer);
+      if (this._sessionId !== sessionId) return;
       if (beforeOffer) {
         await beforeOffer;
-        // The card may have been torn down while the answer was in flight.
-        if (this._pc !== pc) return;
+        if (this._sessionId !== sessionId) return;
       }
       const response = await this._send("bticino_companion/card_webrtc_offer", {
-        session_id: this._sessionId,
+        session_id: sessionId,
         offer_sdp: pc.localDescription.sdp,
       });
+      if (this._sessionId !== sessionId) return;
       if (!response?.answer_sdp) throw new Error("Camera returned no WebRTC answer");
       this._offerAccepted = true;
       await pc.setRemoteDescription({ type: "answer", sdp: response.answer_sdp });
+      if (this._sessionId !== sessionId) return;
       await Promise.all(this._queuedCandidates.splice(0).map((candidate) => this._sendCandidate(candidate)));
+      if (this._sessionId !== sessionId) return;
       this._attachVideo();
     } catch (err) {
-      this._error = err?.message || String(err);
+      // Torn down meanwhile: the teardown already rendered, and the failure is
+      // only the closed connection talking.
+      if (this._sessionId !== sessionId) return;
+      if (this._preview) {
+        // A preview is a courtesy: when it cannot start the user sees no error.
+        this._error = "";
+        console.debug("bticino-go-intercom-card: ringing preview unavailable", err);
+      } else {
+        this._error = err?.message || String(err);
+      }
       this._cleanup();
     }
     this._connecting = false;
@@ -289,32 +330,45 @@ class BTicinoGoIntercomCard extends HTMLElement {
   async _answerPreview() {
     const pc = this._pc;
     this._error = "";
-    const microphone = navigator.mediaDevices?.getUserMedia
-      ? navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => undefined)
-      : Promise.resolve(undefined);
+    this._answering = true;
     try {
-      await this._send("bticino_companion/card_call_answer", {});
-    } catch (err) {
-      (await microphone)?.getTracks().forEach((track) => track.stop());
-      this._error = err?.message || String(err);
-      this._render();
-      return;
-    }
-    const stream = await microphone;
-    if (this._pc !== pc) {
-      stream?.getTracks().forEach((track) => track.stop());
-      return;
-    }
-    this._preview = false;
-    if (stream && this._audioSender) {
-      this._localStream = stream;
-      this._micTrack = stream.getAudioTracks()[0];
-      this._micTrack.enabled = !this._muted;
+      const microphone = navigator.mediaDevices?.getUserMedia
+        ? navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => undefined)
+        : Promise.resolve(undefined);
       try {
-        await this._audioSender.replaceTrack(this._micTrack);
+        await this._send("bticino_companion/card_call_answer", {});
       } catch (err) {
-        console.warn("bticino-go-intercom-card: could not attach the microphone", err);
+        (await microphone)?.getTracks().forEach((track) => track.stop());
+        this._error = err?.message || String(err);
+        this._render();
+        return;
       }
+      if (this._pc === pc) this._preview = false;
+      await this._attachMicrophone(pc, microphone);
+    } finally {
+      this._answering = false;
+    }
+  }
+
+  // Puts the microphone on the audio transceiver negotiated by the preview.
+  // microphone is a promise of a MediaStream, or undefined when none was obtained.
+  async _attachMicrophone(pc, microphone) {
+    const stream = await microphone;
+    if (!stream) return;
+    if (this._pc !== pc || !this._audioSender) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    this._localStream = stream;
+    this._micTrack = stream.getAudioTracks()[0];
+    this._micTrack.enabled = !this._muted;
+    try {
+      await this._audioSender.replaceTrack(this._micTrack);
+    } catch (err) {
+      stream.getTracks().forEach((track) => track.stop());
+      this._localStream = undefined;
+      this._micTrack = undefined;
+      console.warn("bticino-go-intercom-card: could not attach the microphone", err);
     }
     this._render();
   }
