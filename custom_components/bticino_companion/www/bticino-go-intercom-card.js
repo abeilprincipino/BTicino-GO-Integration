@@ -169,7 +169,11 @@ class BTicinoGoIntercomCard extends HTMLElement {
       pc.onicecandidate = ({ candidate }) => {
         if (!candidate) return;
         const payload = this._candidatePayload(candidate);
-        if (this._offerAccepted) this._sendCandidate(payload).catch(() => {});
+        if (this._offerAccepted) {
+          this._sendCandidate(payload).catch((err) => {
+            console.warn("bticino-go-intercom-card: failed to send ICE candidate", err);
+          });
+        }
         else this._queuedCandidates.push(payload);
       };
       pc.onconnectionstatechange = () => {

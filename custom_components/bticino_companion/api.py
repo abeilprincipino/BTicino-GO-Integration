@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote
@@ -27,6 +28,8 @@ from .const import (
     API_PATH_VOICEMAIL_ENABLE,
     API_PATH_WEBRTC_WS,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class CompanionApiError(Exception):
@@ -194,6 +197,10 @@ class CompanionApiClient:
         """Forward a Home Assistant WebRTC ICE candidate over its session socket."""
         session = self._webrtc_sessions.get(session_id)
         if session is None:
+            _LOGGER.warning(
+                "Dropped ICE candidate for unknown/discarded WebRTC session %s",
+                session_id,
+            )
             return {"session_id": session_id, "ignored": True}
         return await self._async_webrtc_message(
             session, "candidate", session_id, {"session_id": session_id, "candidate": candidate}
@@ -218,6 +225,11 @@ class CompanionApiClient:
     ) -> dict[str, Any]:
         async with session.lock:
             if session.closing and message_type != "close":
+                _LOGGER.warning(
+                    "Dropped %s for WebRTC session %s: session is already closing",
+                    message_type,
+                    session_id,
+                )
                 return {"session_id": session_id, "ignored": True}
             if message_type == "close":
                 session.closing = True

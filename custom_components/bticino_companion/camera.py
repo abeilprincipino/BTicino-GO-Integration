@@ -216,6 +216,11 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
         """Release the Companion media session when HA closes its peer connection."""
         if session_id not in self._active_webrtc_sessions:
             return
+        _LOGGER.warning(
+            "Home Assistant is closing WebRTC session %s for %s before the card did",
+            session_id,
+            self._entrypoint_id,
+        )
         self._active_webrtc_sessions.remove(session_id)
         self.hass.async_create_background_task(
             self._async_close_webrtc_session(session_id),
