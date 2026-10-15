@@ -52,12 +52,13 @@ class BTicinoGoIntercomCard extends HTMLElement {
       this._attachVideo();
       return;
     }
-    // One preview attempt per ring: a failed one is not retried until the next
-    // call, so a refusal cannot turn into a loop of offers.
+    // One preview attempt per SIP call, reset when no SIP call is answerable: a
+    // failed one is not retried until the next call, so a refusal cannot turn
+    // into a loop of offers.
     // bticino_is_ringing also covers a bus ring with no SIP call, which the companion could only serve by dialling the ringing intercom.
-    if (!this._isRinging()) {
+    if (!this._canAnswer()) {
       this._previewTried = false;
-    } else if (!this._previewTried && this._canAnswer() && this.isConnected) {
+    } else if (!this._previewTried && this.isConnected) {
       this._previewTried = true;
       this._start(undefined, { preview: true });
       return;
