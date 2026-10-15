@@ -16,6 +16,11 @@ class BTicinoGoIntercomCard extends HTMLElement {
     this._error = "";
     this._elsewhereUntil = 0;
     this._elsewhereLatched = false;
+    // A ringing preview is the session opened while the call rings: video only,
+    // microphone transceiver negotiated but empty until the answer.
+    this._preview = false;
+    this._previewTried = false;
+    this._audioSender = undefined;
   }
 
   setConfig(config) {
@@ -26,8 +31,23 @@ class BTicinoGoIntercomCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
+    // A ringing preview ends with the ring — cancelled, timed out, answered
+    // elsewhere or declined. The companion closes its side on its own; this
+    // closes ours. An answer from this card turns the call active and keeps it.
+    if (this._preview && (this._pc || this._connecting) && !this._isRinging() && this._callState() !== "active") {
+      this._end();
+    }
     if (this._pc || this._connecting) {
       this._attachVideo();
+      return;
+    }
+    // One preview attempt per ring: a failed one is not retried until the next
+    // call, so a refusal cannot turn into a loop of offers.
+    if (!this._isRinging()) {
+      this._previewTried = false;
+    } else if (!this._previewTried && this.isConnected) {
+      this._previewTried = true;
+      this._start(undefined, { preview: true });
       return;
     }
     // The companion keeps last_incoming_call_end set until the next call starts,
@@ -138,16 +158,18 @@ class BTicinoGoIntercomCard extends HTMLElement {
   }
 
   // beforeOffer, when given, is awaited just before the offer goes out: everything
-  // up to the local offer is prepared while it is still pending.
-  async _start(beforeOffer) {
+  // up to the local offer is prepared while it is still pending. preview opens the
+  // session while the call rings: no microphone is asked for until the answer.
+  async _start(beforeOffer, { preview = false } = {}) {
     if (this._pc || this._connecting) return;
     this._connecting = true;
+    this._preview = preview;
     this._error = "";
     this._render();
     try {
       this._sessionId = this._newSessionId();
       this._remoteStream = new MediaStream();
-      if (navigator.mediaDevices?.getUserMedia) {
+      if (!preview && navigator.mediaDevices?.getUserMedia) {
         try {
           this._localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
           this._micTrack = this._localStream.getAudioTracks()[0];
@@ -182,12 +204,16 @@ class BTicinoGoIntercomCard extends HTMLElement {
         this._connected = pc.connectionState === "connected";
         if (this._connected && this._micTrack) this._micTrack.enabled = !this._muted;
         if (["failed", "closed"].includes(pc.connectionState) && this._pc === pc) {
-          this._error = "WebRTC connection was lost.";
+          this._error = this._preview ? "" : "WebRTC connection was lost.";
           this._cleanup();
         }
         this._render();
       };
-      if (this._micTrack) {
+      if (preview) {
+        // Negotiated now, filled at the answer with replaceTrack: answering then
+        // needs no new offer and the video never stops.
+        this._audioSender = pc.addTransceiver("audio", { direction: "sendrecv" }).sender;
+      } else if (this._micTrack) {
         pc.addTrack(this._micTrack, this._localStream);
       } else {
         pc.addTransceiver("audio", { direction: "recvonly" });
@@ -273,6 +299,8 @@ class BTicinoGoIntercomCard extends HTMLElement {
     this._connected = false;
     this._connecting = false;
     this._muted = false;
+    this._preview = false;
+    this._audioSender = undefined;
     this._micTrack?.stop();
     this._localStream?.getTracks().forEach((track) => track.stop());
     this._localStream = undefined;
@@ -306,7 +334,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
     const active = !!this._pc || this._connecting;
     const callState = this._callState();
     const remoteActive = callState === "active" || callState === "preview";
-    const canAnswer = this._canAnswer() && !active;
+    const canAnswer = this._canAnswer() && (!active || this._preview);
     // inCall is read from the camera's own state, not from this card's session,
     // so it still holds when _start() has failed on an answered call: _cleanup()
     // drops _pc and clears _connecting, and the _render() at the tail of _start()
@@ -316,9 +344,11 @@ class BTicinoGoIntercomCard extends HTMLElement {
     // hang it up: every later preview would return without dialling and every
     // later inbound call would be answered busy, until the companion restarts.
     const inCall = callState === "active";
-    const canEnd = active || inCall;
+    const canEnd = (active && !this._preview) || inCall;
     const status = this._elsewhereUntil
       ? ["Answered elsewhere", "idle"]
+      : this._preview
+      ? ["Ringing", "ringing"]
       : this._connecting
       ? ["Connecting", "connecting"]
         : this._connected
@@ -351,7 +381,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
         <video class="${this._connected ? "" : "hidden"}" playsinline autoplay></video>
         <div class="ring-overlay ${ringing && !active ? "" : "hidden"}"><div class="ring-pulse"></div><div class="ring-label">${this._escape(entrypoint)}</div><div>Incoming call</div></div>
       </div><div class="controls">
-        <button class="call ${active || (ringing && !canAnswer) ? "hidden" : ""}" title="${canAnswer ? "Answer" : "Start live view"}"><ha-icon icon="mdi:phone"></ha-icon></button>
+        <button class="call ${(active && !this._preview) || (ringing && !canAnswer) ? "hidden" : ""}" title="${canAnswer ? "Answer" : "Start live view"}"><ha-icon icon="mdi:phone"></ha-icon></button>
         <button class="end ${canEnd ? "" : "hidden"}" title="${inCall ? "Hang up" : "End live view"}"><ha-icon icon="mdi:phone-hangup"></ha-icon></button>
         <button class="mute ${this._connected && this._micTrack ? "" : "hidden"}" title="${this._muted ? "Unmute" : "Mute"}"><ha-icon icon="${this._muted ? "mdi:microphone-off" : "mdi:microphone"}"></ha-icon></button>
         <button class="unlock" title="Unlock"><ha-icon icon="mdi:lock-open"></ha-icon></button>
