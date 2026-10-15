@@ -21,6 +21,10 @@ class BTicinoGoIntercomCard extends HTMLElement {
     this._preview = false;
     this._previewTried = false;
     this._audioSender = undefined;
+    // Settles with the preview's audio sender (undefined if the session ends first),
+    // so an answer given while still connecting can wait for it.
+    this._senderReady = undefined;
+    this._resolveSender = undefined;
     // True while _answerPreview runs, so set hass does not mistake our own answer
     // for one made by another client.
     this._answering = false;
@@ -34,24 +38,15 @@ class BTicinoGoIntercomCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    // A ringing preview ends with the ring — cancelled, timed out, answered
-    // elsewhere or declined. The companion closes its side on its own; this
-    // closes ours. An answer from this card turns the call active and keeps it.
-    if (this._preview && (this._pc || this._connecting) && !this._isRinging() && this._callState() !== "active") {
-      this._end();
-    }
+    this._endPreviewIfRingOver();
     if (this._pc || this._connecting) {
       // The call was answered through the companion by another client: the lease
-      // is promoted, so the session stays (closing it would end the call) and
-      // becomes the call. No user gesture is available, so the microphone is
-      // attached only if its permission was already granted.
+      // is promoted, so the session stays (closing it would end the call). This
+      // card stays a listen-only viewer: no microphone is taken without a user
+      // gesture, and if the answering client is another card, its own offer
+      // replaces this session on the companion.
       if (this._preview && !this._answering && this._callState() === "active") {
         this._preview = false;
-        // Still connecting means no transceiver to fill yet: nothing to attach.
-        const pc = this._pc;
-        if (pc && navigator.mediaDevices?.getUserMedia) {
-          this._attachMicrophone(pc, navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => undefined));
-        }
         this._render();
       }
       this._attachVideo();
@@ -81,6 +76,17 @@ class BTicinoGoIntercomCard extends HTMLElement {
     }
     this._render();
     this._attachVideo();
+  }
+
+  // A ringing preview ends with the ring — cancelled, timed out, answered
+  // elsewhere or declined. The companion closes its side on its own; this
+  // closes ours. An answer from this card turns the call active and keeps it,
+  // and while it is in flight the companion may report "not ringing" a tick
+  // before "active", so the check waits for it and is repeated when it ends.
+  _endPreviewIfRingOver() {
+    if (this._preview && !this._answering && (this._pc || this._connecting) && !this._isRinging() && this._callState() !== "active") {
+      this._end();
+    }
   }
 
   disconnectedCallback() {
@@ -189,6 +195,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
       // Every await below can outlive the session (the ring ends, the card is
       // removed): a changed id means it was torn down and nothing may go on.
       sessionId = this._sessionId;
+      if (preview) this._senderReady = new Promise((resolve) => { this._resolveSender = resolve; });
       this._remoteStream = new MediaStream();
       if (!preview && navigator.mediaDevices?.getUserMedia) {
         try {
@@ -241,6 +248,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
         // Negotiated now, filled at the answer with replaceTrack: answering then
         // needs no new offer and the video never stops.
         this._audioSender = pc.addTransceiver("audio", { direction: "sendrecv" }).sender;
+        this._resolveSender?.(this._audioSender);
       } else if (this._micTrack) {
         pc.addTrack(this._micTrack, this._localStream);
       } else {
@@ -304,7 +312,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
   }
 
   async _answer() {
-    if (this._preview && this._pc) return this._answerPreview();
+    if (this._preview && (this._pc || this._connecting)) return this._answerPreview();
     this._error = "";
     let answered;
     try {
@@ -323,12 +331,14 @@ class BTicinoGoIntercomCard extends HTMLElement {
     await this._start(answered);
   }
 
-  // The preview session is already up: answering only tells the companion and
-  // attaches the microphone to the transceiver negotiated at the start. The
-  // microphone is requested at the click, alongside the answer, so the browser
-  // still sees the user gesture and neither waits for the other.
+  // The preview session is up or still coming up: answering only tells the
+  // companion and attaches the microphone to the transceiver negotiated at the
+  // start. The microphone is requested at the click, alongside the answer, so the
+  // browser still sees the user gesture and neither waits for the other.
   async _answerPreview() {
-    const pc = this._pc;
+    if (this._answering) return;
+    // The session is identified by id, not by pc, which may not exist yet.
+    const sessionId = this._sessionId;
     this._error = "";
     this._answering = true;
     try {
@@ -338,36 +348,51 @@ class BTicinoGoIntercomCard extends HTMLElement {
       try {
         await this._send("bticino_companion/card_call_answer", {});
       } catch (err) {
-        (await microphone)?.getTracks().forEach((track) => track.stop());
+        // The prompt may still be open: release the stream whenever it arrives,
+        // but show the error now.
+        microphone.then((stream) => stream?.getTracks().forEach((track) => track.stop()));
         this._error = err?.message || String(err);
         this._render();
         return;
       }
-      if (this._pc === pc) this._preview = false;
-      await this._attachMicrophone(pc, microphone);
+      if (this._sessionId === sessionId) {
+        this._preview = false;
+        // Rendered here too: without a microphone nothing else would show the
+        // hang-up button.
+        this._render();
+      }
+      await this._attachMicrophone(sessionId, microphone);
     } finally {
       this._answering = false;
+      this._endPreviewIfRingOver();
     }
   }
 
   // Puts the microphone on the audio transceiver negotiated by the preview.
   // microphone is a promise of a MediaStream, or undefined when none was obtained.
-  async _attachMicrophone(pc, microphone) {
+  async _attachMicrophone(sessionId, microphone) {
     const stream = await microphone;
     if (!stream) return;
-    if (this._pc !== pc || !this._audioSender) {
+    // A connecting preview has no sender yet: wait for it, or for the teardown.
+    const sender = this._audioSender || await this._senderReady;
+    if (this._sessionId !== sessionId || !sender) {
       stream.getTracks().forEach((track) => track.stop());
       return;
+    }
+    if (this._localStream && this._localStream !== stream) {
+      this._localStream.getTracks().forEach((track) => track.stop());
     }
     this._localStream = stream;
     this._micTrack = stream.getAudioTracks()[0];
     this._micTrack.enabled = !this._muted;
     try {
-      await this._audioSender.replaceTrack(this._micTrack);
+      await sender.replaceTrack(this._micTrack);
     } catch (err) {
       stream.getTracks().forEach((track) => track.stop());
-      this._localStream = undefined;
-      this._micTrack = undefined;
+      if (this._localStream === stream) {
+        this._localStream = undefined;
+        this._micTrack = undefined;
+      }
       console.warn("bticino-go-intercom-card: could not attach the microphone", err);
     }
     this._render();
@@ -392,6 +417,9 @@ class BTicinoGoIntercomCard extends HTMLElement {
     this._muted = false;
     this._preview = false;
     this._audioSender = undefined;
+    this._resolveSender?.(undefined);
+    this._senderReady = undefined;
+    this._resolveSender = undefined;
     this._micTrack?.stop();
     this._localStream?.getTracks().forEach((track) => track.stop());
     this._localStream = undefined;
