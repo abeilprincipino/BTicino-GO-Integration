@@ -263,6 +263,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
   }
 
   async _answer() {
+    if (this._preview && this._pc) return this._answerPreview();
     this._error = "";
     let answered;
     try {
@@ -274,12 +275,48 @@ class BTicinoGoIntercomCard extends HTMLElement {
     }
     // Marks the rejection as handled now; _start still sees it when it awaits.
     answered.catch(() => {});
-    // The offer must wait for the answer — the companion adopts the call only
-    // once it is answered, and an offer sent while it still rings would dial the
-    // intercom and be refused busy — but the microphone, the ICE configuration
-    // and the local offer do not, so they are prepared while it is in flight.
+    // Without a preview session the offer waits for the answer, so the
+    // companion adopts the answered call; the microphone, the ICE configuration
+    // and the local offer do not wait, so they are prepared while it is in flight.
     // A failed answer surfaces through _start, which also drops what it prepared.
     await this._start(answered);
+  }
+
+  // The preview session is already up: answering only tells the companion and
+  // attaches the microphone to the transceiver negotiated at the start. The
+  // microphone is requested at the click, alongside the answer, so the browser
+  // still sees the user gesture and neither waits for the other.
+  async _answerPreview() {
+    const pc = this._pc;
+    this._error = "";
+    const microphone = navigator.mediaDevices?.getUserMedia
+      ? navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => undefined)
+      : Promise.resolve(undefined);
+    try {
+      await this._send("bticino_companion/card_call_answer", {});
+    } catch (err) {
+      (await microphone)?.getTracks().forEach((track) => track.stop());
+      this._error = err?.message || String(err);
+      this._render();
+      return;
+    }
+    const stream = await microphone;
+    if (this._pc !== pc) {
+      stream?.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    this._preview = false;
+    if (stream && this._audioSender) {
+      this._localStream = stream;
+      this._micTrack = stream.getAudioTracks()[0];
+      this._micTrack.enabled = !this._muted;
+      try {
+        await this._audioSender.replaceTrack(this._micTrack);
+      } catch (err) {
+        console.warn("bticino-go-intercom-card: could not attach the microphone", err);
+      }
+    }
+    this._render();
   }
 
   async _hangup() {
