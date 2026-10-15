@@ -137,7 +137,9 @@ class BTicinoGoIntercomCard extends HTMLElement {
     });
   }
 
-  async _start() {
+  // beforeOffer, when given, is awaited just before the offer goes out: everything
+  // up to the local offer is prepared while it is still pending.
+  async _start(beforeOffer) {
     if (this._pc || this._connecting) return;
     this._connecting = true;
     this._error = "";
@@ -193,6 +195,11 @@ class BTicinoGoIntercomCard extends HTMLElement {
       pc.addTransceiver("video", { direction: "recvonly" });
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
+      if (beforeOffer) {
+        await beforeOffer;
+        // The card may have been torn down while the answer was in flight.
+        if (this._pc !== pc) return;
+      }
       const response = await this._send("bticino_companion/card_webrtc_offer", {
         session_id: this._sessionId,
         offer_sdp: pc.localDescription.sdp,
@@ -231,15 +238,22 @@ class BTicinoGoIntercomCard extends HTMLElement {
 
   async _answer() {
     this._error = "";
-    this._render();
+    let answered;
     try {
-      await this._send("bticino_companion/card_call_answer", {});
+      answered = this._send("bticino_companion/card_call_answer", {});
     } catch (err) {
       this._error = err?.message || String(err);
       this._render();
       return;
     }
-    await this._start();
+    // Marks the rejection as handled now; _start still sees it when it awaits.
+    answered.catch(() => {});
+    // The offer must wait for the answer — the companion adopts the call only
+    // once it is answered, and an offer sent while it still rings would dial the
+    // intercom and be refused busy — but the microphone, the ICE configuration
+    // and the local offer do not, so they are prepared while it is in flight.
+    // A failed answer surfaces through _start, which also drops what it prepared.
+    await this._start(answered);
   }
 
   async _hangup() {
