@@ -2,4 +2,4 @@
 
 Home Assistant integration for BTicino GO companion devices.
 
-Configuration and usage documentation are available in the repository.
+Installation, setup and the intercom card are documented in the [README](https://github.com/abeilprincipino/BTicino-GO-Integration#readme).
