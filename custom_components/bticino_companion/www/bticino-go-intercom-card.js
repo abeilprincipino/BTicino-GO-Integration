@@ -298,7 +298,15 @@ class BTicinoGoIntercomCard extends HTMLElement {
     const video = this.shadowRoot?.querySelector("video");
     if (video && this._remoteStream && video.srcObject !== this._remoteStream) {
       video.srcObject = this._remoteStream;
-      video.play().catch(() => {});
+      // A ringing preview starts without a user gesture, and the autoplay policy
+      // blocks unmuted playback: muted, the video plays. The preview carries no
+      // audio anyway, and answering renders a new element unmuted.
+      video.muted = this._preview;
+      video.play().catch(() => {
+        if (video.muted) return;
+        video.muted = true;
+        video.play().catch(() => {});
+      });
     }
   }
 
