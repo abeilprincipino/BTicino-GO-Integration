@@ -28,6 +28,12 @@ class BTicinoGoIntercomCard extends HTMLElement {
     // True while _answerPreview runs, so set hass does not mistake our own answer
     // for one made by another client.
     this._answering = false;
+    // True once this card has asked to answer the current call, so a later
+    // "active" is recognised as ours and not as an answer on another device.
+    this._answeredHere = false;
+    // True after this card closed its view because another device answered;
+    // cleared when that call ends.
+    this._leftForElsewhere = false;
   }
 
   setConfig(config) {
@@ -39,15 +45,18 @@ class BTicinoGoIntercomCard extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     this._endPreviewIfRingOver();
+    if (this._leftForElsewhere && this._callState() !== "active") this._leftForElsewhere = false;
     if (this._pc || this._connecting) {
-      // The call was answered through the companion by another client: the lease
-      // is promoted, so the session stays (closing it would end the call). This
-      // card stays a listen-only viewer: no microphone is taken without a user
-      // gesture, and if the answering client is another card, its own offer
-      // replaces this session on the companion.
-      if (this._preview && !this._answering && this._callState() === "active") {
-        this._preview = false;
+      // The call was answered through the companion by another device: this
+      // card steps aside. Closing with leave never ends the call, which the
+      // answering device now carries. See
+      // docs/superpowers/specs/2026-10-22-shared-ringing-stream-design.md in the
+      // Companion repository.
+      if (!this._answering && !this._answeredHere && this._callState() === "active") {
+        this._leftForElsewhere = true;
+        this._cleanup({ leave: true });
         this._render();
+        return;
       }
       this._attachVideo();
       return;
@@ -58,7 +67,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
     // bticino_is_ringing also covers a bus ring with no SIP call, which the companion could only serve by dialling the ringing intercom.
     if (!this._canAnswer()) {
       this._previewTried = false;
-    } else if (!this._previewTried && this.isConnected) {
+    } else if (!this._previewTried && !this._leftForElsewhere && this.isConnected) {
       this._previewTried = true;
       this._start(undefined, { preview: true });
       return;
@@ -323,6 +332,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
 
   async _answer() {
     if (this._preview && (this._pc || this._connecting)) return this._answerPreview();
+    this._answeredHere = true;
     this._error = "";
     let answered;
     try {
@@ -351,6 +361,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
     const sessionId = this._sessionId;
     this._error = "";
     this._answering = true;
+    this._answeredHere = true;
     try {
       const microphone = navigator.mediaDevices?.getUserMedia
         ? navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => undefined)
@@ -417,7 +428,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
     this._end();
   }
 
-  _cleanup() {
+  _cleanup({ leave = false } = {}) {
     const sessionId = this._sessionId;
     this._sessionId = undefined;
     this._offerAccepted = false;
@@ -426,6 +437,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
     this._connecting = false;
     this._muted = false;
     this._preview = false;
+    this._answeredHere = false;
     this._audioSender = undefined;
     this._resolveSender?.(undefined);
     this._senderReady = undefined;
@@ -439,7 +451,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
     pc?.close();
     this._remoteStream = undefined;
     if (sessionId && this._hass) {
-      this._send("bticino_companion/card_webrtc_close", { session_id: sessionId }).catch(() => {});
+      this._send("bticino_companion/card_webrtc_close", { session_id: sessionId, ...(leave ? { leave: true } : {}) }).catch(() => {});
     }
   }
 
@@ -474,7 +486,9 @@ class BTicinoGoIntercomCard extends HTMLElement {
     // later inbound call would be answered busy, until the companion restarts.
     const inCall = callState === "active";
     const canEnd = (active && !this._preview) || inCall;
-    const status = this._elsewhereUntil
+    const status = this._leftForElsewhere && inCall
+      ? ["In a call on another device", "active"]
+      : this._elsewhereUntil
       ? ["Answered elsewhere", "idle"]
       : this._preview
       ? ["Ringing", "ringing"]
@@ -510,7 +524,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
         <video class="${this._connected ? "" : "hidden"}" playsinline autoplay></video>
         <div class="ring-overlay ${ringing && !active ? "" : "hidden"}"><div class="ring-pulse"></div><div class="ring-label">${this._escape(entrypoint)}</div><div>Incoming call</div></div>
       </div><div class="controls">
-        <button class="call ${(active && !this._preview) || (ringing && !canAnswer) ? "hidden" : ""}" title="${canAnswer ? "Answer" : "Start live view"}"><ha-icon icon="mdi:phone"></ha-icon></button>
+        <button class="call ${(active && !this._preview) || (ringing && !canAnswer) || (this._leftForElsewhere && inCall) ? "hidden" : ""}" title="${canAnswer ? "Answer" : "Start live view"}"><ha-icon icon="mdi:phone"></ha-icon></button>
         <button class="end ${canEnd ? "" : "hidden"}" title="${inCall ? "Hang up" : "End live view"}"><ha-icon icon="mdi:phone-hangup"></ha-icon></button>
         <button class="mute ${this._connected && this._micTrack ? "" : "hidden"}" title="${this._muted ? "Unmute" : "Mute"}"><ha-icon icon="${this._muted ? "mdi:microphone-off" : "mdi:microphone"}"></ha-icon></button>
         <button class="unlock" title="Unlock"><ha-icon icon="mdi:lock-open"></ha-icon></button>
