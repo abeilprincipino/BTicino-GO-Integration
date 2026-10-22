@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 try:
     import asyncssh  # noqa: F401
@@ -70,13 +70,11 @@ class ParseProgressTest(unittest.TestCase):
 
 
 class IntercomShellTest(unittest.IsolatedAsyncioTestCase):
-    def _shell(self, *runs: SimpleNamespace, connect_error: Exception | None = None):
+    def _shell(self, *runs: SimpleNamespace):
         connection = MagicMock()
         connection.run = AsyncMock(side_effect=list(runs))
         connection.wait_closed = AsyncMock()
         connector = AsyncMock(return_value=(connection, "ssh-ed25519 AAAAkey"))
-        if connect_error is not None:
-            connector.side_effect = connect_error
         shell = installer.IntercomShell(
             "192.0.2.10", "root", "secret", connector=connector, sleep=AsyncMock(), clock=lambda: 0.0
         )
@@ -141,7 +139,7 @@ class IntercomShellTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_wait_reconnects_after_a_dropped_connection(self) -> None:
         finished = LOG + installer.RC_MARKER + "\n0\n"
-        shell, connection, connector = self._shell(OSError("reset"), _completed(finished))
+        shell, _, connector = self._shell(OSError("reset"), _completed(finished))
         await shell.async_connect()
 
         await shell.async_wait_for_installer(lambda _: None)
@@ -209,3 +207,70 @@ class IntercomShellTest(unittest.IsolatedAsyncioTestCase):
             await shell.async_pair_local(None)
 
         self.assertEqual(caught.exception.code, "cannot_connect")
+
+    async def test_wait_stops_at_once_when_the_host_key_changes(self) -> None:
+        shell, _, connector = self._shell(OSError("reset"))
+        await shell.async_connect()
+        connector.side_effect = installer.ShellHostKeyMismatch("changed")
+
+        with self.assertRaises(installer.InstallerFailed) as caught:
+            await shell.async_wait_for_installer(lambda _: None)
+
+        self.assertIn("different SSH host key", caught.exception.lines[0])
+        self.assertEqual(connector.await_count, 2)
+
+    async def test_wait_stops_when_the_credentials_are_refused_on_reconnect(self) -> None:
+        shell, _, connector = self._shell(OSError("reset"))
+        await shell.async_connect()
+        connector.side_effect = installer.ShellAuthError("denied")
+
+        with self.assertRaises(installer.InstallerFailed) as caught:
+            await shell.async_wait_for_installer(lambda _: None)
+
+        self.assertIn("refused the SSH credentials", caught.exception.lines[0])
+        self.assertEqual(connector.await_count, 2)
+
+    async def test_pair_local_rejects_a_body_that_is_not_an_object(self) -> None:
+        shell, _, _ = self._shell(_completed("[]\n200"))
+        await shell.async_connect()
+
+        with self.assertRaises(installer.PairLocalError) as caught:
+            await shell.async_pair_local(None)
+
+        self.assertEqual(caught.exception.code, "invalid_response")
+
+    async def test_pair_local_rejects_an_error_that_is_not_an_object(self) -> None:
+        shell, _, _ = self._shell(_completed('{"ok": false, "error": "x"}\n400'))
+        await shell.async_connect()
+
+        with self.assertRaises(installer.PairLocalError) as caught:
+            await shell.async_pair_local(None)
+
+        self.assertEqual((caught.exception.status, caught.exception.code), (400, "invalid_response"))
+
+
+class AsyncsshConnectTest(unittest.IsolatedAsyncioTestCase):
+    async def test_a_missing_host_key_is_an_error(self) -> None:
+        connection = MagicMock()
+        connection.get_server_host_key.return_value = None
+        with patch.object(installer.asyncssh, "connect", AsyncMock(return_value=connection)):
+            with self.assertRaises(installer.ShellConnectError):
+                await installer._asyncssh_connect("192.0.2.10", "root", "secret", None)
+
+    async def test_an_unverifiable_host_key_is_a_mismatch(self) -> None:
+        error = installer.asyncssh.HostKeyNotVerifiable("no")
+        with patch.object(installer.asyncssh, "connect", AsyncMock(side_effect=error)):
+            with self.assertRaises(installer.ShellHostKeyMismatch):
+                await installer._asyncssh_connect("192.0.2.10", "root", "secret", None)
+
+    async def test_refused_credentials_are_an_auth_error(self) -> None:
+        error = installer.asyncssh.PermissionDenied("no")
+        with patch.object(installer.asyncssh, "connect", AsyncMock(side_effect=error)):
+            with self.assertRaises(installer.ShellAuthError):
+                await installer._asyncssh_connect("192.0.2.10", "root", "secret", None)
+
+    async def test_a_malformed_pinned_key_is_a_mismatch(self) -> None:
+        with patch.object(installer.asyncssh, "connect", AsyncMock()) as connect:
+            with self.assertRaises(installer.ShellHostKeyMismatch):
+                await installer._asyncssh_connect("192.0.2.10", "root", "secret", "not a key")
+        connect.assert_not_awaited()

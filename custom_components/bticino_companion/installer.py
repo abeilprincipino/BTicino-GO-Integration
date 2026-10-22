@@ -131,9 +131,9 @@ async def _asyncssh_connect(
     host: str, username: str, password: str, expected_host_key: str | None
 ) -> tuple[Any, str]:
     known_hosts: Any = None
-    if expected_host_key:
-        known_hosts = ([asyncssh.import_public_key(expected_host_key)], [], [])
     try:
+        if expected_host_key:
+            known_hosts = ([asyncssh.import_public_key(expected_host_key)], [], [])
         connection = await asyncssh.connect(
             host,
             username=username,
@@ -143,14 +143,17 @@ async def _asyncssh_connect(
             agent_path=None,
             connect_timeout=CONNECT_TIMEOUT_SECONDS,
         )
-    except asyncssh.HostKeyNotVerifiable as err:
+    except (asyncssh.HostKeyNotVerifiable, asyncssh.KeyImportError) as err:
         raise ShellHostKeyMismatch(str(err)) from err
     except asyncssh.PermissionDenied as err:
         raise ShellAuthError(str(err)) from err
     except (OSError, asyncssh.Error) as err:
         raise ShellConnectError(str(err)) from err
     key = connection.get_server_host_key()
-    host_key = key.export_public_key("openssh").decode().strip() if key is not None else ""
+    if key is None:
+        connection.close()
+        raise ShellConnectError("the intercom did not present an SSH host key")
+    host_key = key.export_public_key("openssh").decode().strip()
     return connection, host_key
 
 
@@ -228,6 +231,15 @@ class IntercomShell:
                     ) from None
                 try:
                     await self.async_connect()
+                except ShellHostKeyMismatch:
+                    raise InstallerFailed(
+                        ("FAIL: The intercom presented a different SSH host key while installing; "
+                         "stopped following the installation.",)
+                    ) from None
+                except ShellAuthError:
+                    raise InstallerFailed(
+                        ("FAIL: The intercom refused the SSH credentials when reconnecting.",)
+                    ) from None
                 except ShellError as err:
                     _LOGGER.debug("Reconnection to the intercom failed: %s", err)
                 await self._sleep(POLL_INTERVAL_SECONDS)
@@ -267,8 +279,12 @@ class IntercomShell:
             payload = json.loads(payload_text)
         except ValueError:
             raise PairLocalError(status, "invalid_response") from None
+        if not isinstance(payload, dict):
+            raise PairLocalError(status, "invalid_response")
         if status != 200 or not payload.get("ok"):
             error = payload.get("error") or {}
+            if not isinstance(error, dict):
+                raise PairLocalError(status, "invalid_response")
             raise PairLocalError(status, str(error.get("code", "unknown")), str(error.get("message", "")))
         return payload
 
