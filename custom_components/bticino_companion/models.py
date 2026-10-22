@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 
@@ -55,6 +56,8 @@ class Entrypoint:
     devaddr: str
     capabilities: Capability
     availability: Availability
+    snapshot_updated_at: datetime | None = None
+    ring_snapshot_updated_at: datetime | None = None
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "Entrypoint":
@@ -64,6 +67,8 @@ class Entrypoint:
             devaddr=str(payload.get("devaddr", "")).strip(),
             capabilities=Capability.from_dict(mapping_at(payload, "capabilities")),
             availability=Availability.from_dict(mapping_at(payload, "availability")),
+            snapshot_updated_at=_optional_datetime(payload.get("snapshot_updated_at")),
+            ring_snapshot_updated_at=_optional_datetime(payload.get("ring_snapshot_updated_at")),
         )
 
 
@@ -230,6 +235,20 @@ class CompanionState:
 def _optional_string(value: Any) -> str | None:
     value = str(value).strip() if value is not None else ""
     return value or None
+
+
+def _optional_datetime(value: Any) -> datetime | None:
+    """Parse an RFC 3339 time from the Companion, or return None."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def _optional_bool(value: Any) -> bool | None:

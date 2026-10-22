@@ -331,6 +331,20 @@ class TypedControlTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(camera.available)
 
+    async def test_camera_card_session_can_leave_without_ending_the_call(self) -> None:
+        entry = _MockEntry()
+        stream = Entrypoint.from_dict(
+            {"id": "main", "label": "Main", "capabilities": {"stream": True}, "availability": {"stream": True}}
+        )
+        camera = CompanionEntrypointCamera(
+            entry, _coordinator(_state(entrypoints=(stream,))), entry.runtime_data.client, "main", "Main"
+        )
+
+        await camera.async_handle_card_webrtc_offer("offer-sdp", "session-1")
+        await camera.async_close_card_webrtc_session("session-1", leave=True)
+
+        entry.runtime_data.client.async_webrtc_close.assert_awaited_once_with(session_id="session-1", leave=True)
+
 
 class _MockPlatform:
     def __init__(self) -> None:

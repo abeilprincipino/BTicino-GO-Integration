@@ -82,6 +82,7 @@ async def _handle_candidate(hass: HomeAssistant, connection, msg: dict[str, Any]
         vol.Required("type"): "bticino_companion/card_webrtc_close",
         vol.Required("camera_entity_id"): str,
         vol.Required("session_id"): str,
+        vol.Optional("leave", default=False): bool,
     }
 )
 @websocket_api.async_response
@@ -89,7 +90,7 @@ async def _handle_close(hass: HomeAssistant, connection, msg: dict[str, Any]) ->
     """Close only the session owned by the configured camera entity."""
     try:
         await _camera_for_message(hass, msg).async_close_card_webrtc_session(
-            str(msg["session_id"]).strip()
+            str(msg["session_id"]).strip(), leave=msg["leave"]
         )
     except (CompanionApiError, HomeAssistantError, ValueError) as err:
         connection.send_error(msg["id"], "webrtc_close_failed", str(err))

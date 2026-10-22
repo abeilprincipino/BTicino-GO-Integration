@@ -23,6 +23,7 @@ from .const import (
     API_PATH_SYSTEM_REBOOT,
     API_PATH_SYSTEM_SERVICE_RESTART,
     API_PATH_SNAPSHOT_LATEST,
+    API_PATH_SNAPSHOT_RING,
     API_PATH_UPDATE_INSTALL,
     API_PATH_VOICEMAIL_DISABLE,
     API_PATH_VOICEMAIL_ENABLE,
@@ -206,15 +207,20 @@ class CompanionApiClient:
             session, "candidate", session_id, {"session_id": session_id, "candidate": candidate}
         )
 
-    async def async_webrtc_close(self, *, session_id: str) -> dict[str, Any]:
-        """Close a Companion WebRTC session and its signaling socket."""
+    async def async_webrtc_close(self, *, session_id: str, leave: bool = False) -> dict[str, Any]:
+        """Close a Companion WebRTC session and its signaling socket.
+
+        leave closes it without ending the call: the card steps aside because the
+        call was answered on another device.
+        """
         session = self._webrtc_sessions.get(session_id)
         if session is None:
             return {"session_id": session_id}
+        payload: dict[str, Any] = {"session_id": session_id, "reason": "ha_session_closed"}
+        if leave:
+            payload.update(reason="answered_elsewhere", leave=True)
         try:
-            return await self._async_webrtc_message(
-                session, "close", session_id, {"session_id": session_id, "reason": "ha_session_closed"}
-            )
+            return await self._async_webrtc_message(session, "close", session_id, payload)
         except ClientError as err:
             raise CompanionApiError("unable to close Companion WebRTC session") from err
         finally:
@@ -263,11 +269,18 @@ class CompanionApiClient:
 
     async def async_entrypoint_snapshot_latest(self, entrypoint_id: str) -> bytes | None:
         """Return the last passive snapshot without requesting a new capture."""
+        return await self._async_snapshot(API_PATH_SNAPSHOT_LATEST, entrypoint_id)
+
+    async def async_entrypoint_snapshot_ring(self, entrypoint_id: str) -> bytes | None:
+        """Return the picture taken at the last doorbell ring, if any."""
+        return await self._async_snapshot(API_PATH_SNAPSHOT_RING, entrypoint_id)
+
+    async def _async_snapshot(self, path: str, entrypoint_id: str) -> bytes | None:
         if not self._access_token:
             raise CompanionAuthError("an access token is required")
         try:
             async with self._session.get(
-                f"{self._base_url}{API_PATH_SNAPSHOT_LATEST.format(entrypoint_id=quote(entrypoint_id, safe=''))}",
+                f"{self._base_url}{path.format(entrypoint_id=quote(entrypoint_id, safe=''))}",
                 headers={"Accept": "image/jpeg", "Authorization": f"Bearer {self._access_token}"},
             ) as response:
                 if response.status == 404:
