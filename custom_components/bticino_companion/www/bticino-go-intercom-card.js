@@ -338,6 +338,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
     try {
       answered = this._send("bticino_companion/card_call_answer", {});
     } catch (err) {
+      this._answeredHere = false;
       this._error = err?.message || String(err);
       this._render();
       return;
@@ -372,6 +373,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
         // The prompt may still be open: release the stream whenever it arrives,
         // but show the error now.
         microphone.then((stream) => stream?.getTracks().forEach((track) => track.stop()));
+        this._answeredHere = false;
         this._error = err?.message || String(err);
         this._render();
         return;
