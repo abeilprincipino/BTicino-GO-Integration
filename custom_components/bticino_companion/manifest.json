@@ -9,7 +9,7 @@
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/abeilprincipino/BTicino-GO-Integration/issues",
   "loggers": ["custom_components.bticino_companion"],
-  "requirements": [],
+  "requirements": ["asyncssh==2.19.0"],
   "version": "3.0.0",
   "zeroconf": [
     {
