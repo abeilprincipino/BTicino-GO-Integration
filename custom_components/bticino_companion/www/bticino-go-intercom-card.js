@@ -198,6 +198,10 @@ class BTicinoGoIntercomCard extends HTMLElement {
     this._connecting = true;
     this._preview = preview;
     this._error = "";
+    // An explicit live view during a call is this device joining it, not a stale
+    // preview: without this the next hass update would close it with a leave. The
+    // companion's single-talker rule keeps two microphones from mixing.
+    if (!preview && this._callState() === "active") this._answeredHere = true;
     this._render();
     // Declared outside the try so the catch can tell a teardown from a failure.
     let sessionId;

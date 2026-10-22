@@ -130,7 +130,7 @@ Companion takes its picture about 2–3 seconds after each SIP ring, and the ent
 time of that picture: it changes only on a new ring, never on a live view. Trigger notifications on
 it rather than on the Ringing sensor, which turns on before the picture exists.
 
-Pick the entity id from the entity list (it depends on your installation's language), then:
+Pick the entity from the entity list (its id is derived from the device and entrypoint names), then:
 
 ```yaml
 automation:
@@ -138,9 +138,12 @@ automation:
     triggers:
       - trigger: state
         entity_id: image.REPLACE_WITH_YOUR_ENTITY
-    conditions:
-      - condition: template
-        value_template: "{{ trigger.to_state.state not in ['unknown', 'unavailable'] }}"
+        not_from:
+          - unknown
+          - unavailable
+        not_to:
+          - unknown
+          - unavailable
     actions:
       - action: notify.mobile_app_REPLACE_WITH_YOUR_PHONE
         data:
