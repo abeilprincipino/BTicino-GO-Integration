@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import sys
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 import unittest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiohttp import ClientError, WSMsgType
 
@@ -20,6 +21,7 @@ try:
     from bticino_companion.api import CompanionApiClient, CompanionApiError
     from bticino_companion.coordinator import CompanionCoordinator
     from bticino_companion.dynamic_entities import DynamicEntityManager
+    from bticino_companion.image import CompanionRingSnapshotImage
     from bticino_companion.models import CompanionState, Diagnostics, Entrypoint, SystemService, UpdateInfo
     from bticino_companion.switch import CompanionMuteSwitch, CompanionVoicemailSwitch
     from bticino_companion.update import CompanionUpdate
@@ -46,6 +48,7 @@ class _MockEntry:
         self.runtime_data.client.async_webrtc_candidate = AsyncMock()
         self.runtime_data.client.async_webrtc_close = AsyncMock()
         self.runtime_data.client.async_entrypoint_snapshot_latest = AsyncMock(return_value=None)
+        self.runtime_data.client.async_entrypoint_snapshot_ring = AsyncMock(return_value=b"jpeg")
 
     def async_on_unload(self, listener):
         return lambda: None
@@ -346,6 +349,49 @@ class TypedControlTest(unittest.IsolatedAsyncioTestCase):
         entry.runtime_data.client.async_webrtc_close.assert_awaited_once_with(session_id="session-1", leave=True)
 
 
+class RingSnapshotImageTest(unittest.IsolatedAsyncioTestCase):
+    def _image(self, entry, entrypoint) -> CompanionRingSnapshotImage:
+        with patch("homeassistant.components.image.get_async_client"):
+            return CompanionRingSnapshotImage(
+                MagicMock(), entry, _coordinator(_state(entrypoints=(entrypoint,))), entry.runtime_data.client, "main", "Main"
+            )
+
+    async def test_state_is_the_time_of_the_last_ring_picture(self) -> None:
+        entry = _MockEntry()
+        rang = datetime(2026, 10, 22, 9, 30, tzinfo=timezone.utc)
+        entrypoint = Entrypoint.from_dict({"id": "main", "capabilities": {"stream": True}})
+        image = self._image(entry, entrypoint)
+
+        self.assertIsNone(image.image_last_updated)
+
+        image.coordinator.data = _state(
+            entrypoints=(Entrypoint.from_dict(
+                {"id": "main", "capabilities": {"stream": True}, "ring_snapshot_updated_at": rang.isoformat()}
+            ),)
+        )
+
+        self.assertEqual(image.image_last_updated, rang)
+        self.assertEqual(image.unique_id, "device-123_ring_snapshot_main")
+
+    async def test_fetches_the_picture_once_per_ring(self) -> None:
+        entry = _MockEntry()
+        entrypoint = Entrypoint.from_dict(
+            {"id": "main", "capabilities": {"stream": True}, "ring_snapshot_updated_at": "2026-10-22T09:30:00Z"}
+        )
+        image = self._image(entry, entrypoint)
+
+        self.assertEqual(await image.async_image(), b"jpeg")
+        self.assertEqual(await image.async_image(), b"jpeg")
+        entry.runtime_data.client.async_entrypoint_snapshot_ring.assert_awaited_once_with("main")
+
+    async def test_no_picture_before_the_first_ring(self) -> None:
+        entry = _MockEntry()
+        image = self._image(entry, Entrypoint.from_dict({"id": "main", "capabilities": {"stream": True}}))
+
+        self.assertIsNone(await image.async_image())
+        entry.runtime_data.client.async_entrypoint_snapshot_ring.assert_not_awaited()
+
+
 class _MockPlatform:
     def __init__(self) -> None:
         self.entities: dict[str, object] = {}
@@ -430,3 +476,15 @@ class DynamicEntityManagerTest(unittest.IsolatedAsyncioTestCase):
         await manager.async_register_platform("camera", platform)
 
         self.assertEqual([entity.unique_id for entity in platform.added], ["device-123_camera_main"])
+
+    async def test_reconciles_one_ring_image_per_stream_capable_entrypoint(self) -> None:
+        entry = _MockEntry()
+        stream = Entrypoint.from_dict({"id": "main", "capabilities": {"stream": True}})
+        entry.runtime_data.coordinator = _coordinator(_state(entrypoints=(stream,)))
+        manager = DynamicEntityManager(MagicMock(), entry, entry.runtime_data.coordinator, entry.runtime_data.client)
+        platform = _MockPlatform()
+
+        with patch("homeassistant.components.image.get_async_client"):
+            await manager.async_register_platform("image", platform)
+
+        self.assertEqual([entity.unique_id for entity in platform.added], ["device-123_ring_snapshot_main"])

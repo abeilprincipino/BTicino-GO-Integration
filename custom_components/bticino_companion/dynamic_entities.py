@@ -123,6 +123,7 @@ class DynamicEntityManager:
         # Imports stay here to keep platform modules free of an import cycle.
         from .button import CompanionEntrypointButton, CompanionRebootButton, CompanionServiceRestartButton
         from .camera import CompanionEntrypointCamera
+        from .image import CompanionRingSnapshotImage
         from .switch import CompanionVoicemailSwitch
         from .update import CompanionUpdate
 
@@ -135,6 +136,20 @@ class DynamicEntityManager:
                         "camera",
                         unique_id,
                         lambda entrypoint=entrypoint: CompanionEntrypointCamera(
+                            self._entry,
+                            self._coordinator,
+                            self._client,
+                            entrypoint.id,
+                            entrypoint.label or entrypoint.id,
+                        ),
+                    )
+                )
+                desired.append(
+                    _DesiredEntity(
+                        "image",
+                        f"{self._entry.unique_id}_ring_snapshot_{entrypoint.id}",
+                        lambda entrypoint=entrypoint: CompanionRingSnapshotImage(
+                            self._hass,
                             self._entry,
                             self._coordinator,
                             self._client,

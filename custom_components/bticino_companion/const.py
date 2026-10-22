@@ -12,6 +12,7 @@ CARD_RESOURCE_URL = f"{FRONTEND_PATH}/bticino-go-intercom-card.js?automatically-
 
 PLATFORMS: list[str] = [
     "camera",
+    "image",
     "sensor",
     "binary_sensor",
     "button",

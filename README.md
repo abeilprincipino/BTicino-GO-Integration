@@ -19,6 +19,7 @@ answer, talk, hang up, and unlock from a dashboard.
 - [Installation](#installation)
 - [Setup](#setup)
 - [Intercom Card](#intercom-card)
+- [Doorbell notifications with the picture](#doorbell-notifications-with-the-picture)
 - [Entities](#entities)
 - [Updating](#updating)
 - [Troubleshooting](#troubleshooting)
@@ -122,12 +123,42 @@ What the card does:
 The microphone needs a secure context: open Home Assistant over HTTPS (or `localhost`) for two-way
 audio. Over plain HTTP the card still shows video and can answer, but cannot send audio.
 
+## Doorbell notifications with the picture
+
+Every stream-capable entrypoint gets an image entity, **"<entrypoint> last doorbell ring"**. The
+Companion takes its picture about 2–3 seconds after each SIP ring, and the entity's state is the
+time of that picture: it changes only on a new ring, never on a live view. Trigger notifications on
+it rather than on the Ringing sensor, which turns on before the picture exists.
+
+Pick the entity id from the entity list (it depends on your installation's language), then:
+
+```yaml
+automation:
+  - alias: Doorbell notification
+    triggers:
+      - trigger: state
+        entity_id: image.REPLACE_WITH_YOUR_ENTITY
+    conditions:
+      - condition: template
+        value_template: "{{ trigger.to_state.state not in ['unknown', 'unavailable'] }}"
+    actions:
+      - action: notify.mobile_app_REPLACE_WITH_YOUR_PHONE
+        data:
+          message: Someone is at the door
+          data:
+            image: /api/image_proxy/image.REPLACE_WITH_YOUR_ENTITY
+```
+
+If the Companion cannot open the stream during a ring, no picture is taken and the entity does not
+change, so no notification is sent for that ring.
+
 ## Entities
 
 Entities are created from what the companion reports and appear or disappear as its capabilities
 change. They include:
 
 - **Camera** — one per stream-capable entrypoint, with live WebRTC view and snapshot preview.
+- **Image** — `last doorbell ring` per stream-capable entrypoint, the picture taken at the last ring.
 - **Binary sensor** — `Ringing`.
 - **Sensors** — call state and diagnostics.
 - **Buttons** — unlock per entrypoint, system reboot and service restarts when exposed by the
