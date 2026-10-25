@@ -29,6 +29,11 @@ PAIR_LOCAL_URL = "http://127.0.0.1:8080/api/v3/pair/local"
 RC_MARKER = "--companion-install-rc--"
 
 CONNECT_TIMEOUT_SECONDS = 15
+KEEPALIVE_INTERVAL_SECONDS = 15
+KEEPALIVE_COUNT_MAX = 3
+# Every command here is short (the installer itself runs detached); a longer
+# wait means the session is dead even if TCP has not noticed yet.
+RUN_TIMEOUT_SECONDS = 60
 POLL_INTERVAL_SECONDS = 2
 INSTALL_TIMEOUT_SECONDS = 600
 MAX_RECONNECTS = 3
@@ -142,6 +147,8 @@ async def _asyncssh_connect(
             client_keys=None,
             agent_path=None,
             connect_timeout=CONNECT_TIMEOUT_SECONDS,
+            keepalive_interval=KEEPALIVE_INTERVAL_SECONDS,
+            keepalive_count_max=KEEPALIVE_COUNT_MAX,
         )
     except (asyncssh.HostKeyNotVerifiable, asyncssh.KeyImportError) as err:
         raise ShellHostKeyMismatch(str(err)) from err
@@ -194,10 +201,12 @@ class IntercomShell:
 
     async def async_start_installer(self) -> None:
         """Download install.sh on the intercom and start it detached from the session."""
+        # Spec section 8: setsid when the BusyBox has it, nohup otherwise.
         command = (
             f"rm -f {INSTALL_LOG} {INSTALL_RC} && "
             f"wget -qO {INSTALL_SCRIPT} {shlex.quote(INSTALL_SCRIPT_URL)} && "
-            f"(setsid sh -c 'sh {INSTALL_SCRIPT} >{INSTALL_LOG} 2>&1; echo $? >{INSTALL_RC}' "
+            "detach=$(command -v setsid >/dev/null 2>&1 && echo setsid || echo nohup) && "
+            f"($detach sh -c 'sh {INSTALL_SCRIPT} >{INSTALL_LOG} 2>&1; echo $? >{INSTALL_RC}' "
             "</dev/null >/dev/null 2>&1 &)"
         )
         result = await self._run(command)
@@ -263,11 +272,17 @@ class IntercomShell:
         if owner is not None:
             body = {"owner": {"username": owner[0], "password": owner[1]}}
         # The body goes on stdin so that the password never shows in a process list.
-        result = await self._run(
+        command = (
             "curl -sS --max-time 30 -X POST -H 'Content-Type: application/json' --data-binary @- "
-            f"-w '\\n%{{http_code}}' {PAIR_LOCAL_URL}",
-            input=json.dumps(body),
+            f"-w '\\n%{{http_code}}' {PAIR_LOCAL_URL}"
         )
+        try:
+            result = await self._run(command, input=json.dumps(body))
+        except ShellConnectError:
+            # The session may have idled out while the user filled the form.
+            # The reconnection stays pinned to the host key seen first.
+            await self.async_connect()
+            result = await self._run(command, input=json.dumps(body))
         payload_text, _, status_text = str(result.stdout or "").rstrip("\n").rpartition("\n")
         try:
             status = int(status_text.strip())
@@ -302,6 +317,9 @@ class IntercomShell:
         if self._connection is None:
             raise ShellConnectError("not connected")
         try:
-            return await self._connection.run(command, input=input, check=False)
+            async with asyncio.timeout(RUN_TIMEOUT_SECONDS):
+                return await self._connection.run(command, input=input, check=False)
+        except TimeoutError as err:
+            raise ShellConnectError("the intercom did not answer in time") from err
         except (OSError, asyncssh.Error) as err:
             raise ShellConnectError(str(err)) from err

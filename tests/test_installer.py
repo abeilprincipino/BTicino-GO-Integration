@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 from pathlib import Path
@@ -102,8 +103,63 @@ class IntercomShellTest(unittest.IsolatedAsyncioTestCase):
 
         command = connection.run.await_args.args[0]
         self.assertIn("wget -qO /tmp/companion-install.sh", command)
-        self.assertIn("setsid sh -c", command)
+        self.assertIn("$detach sh -c", command)
         self.assertIn("echo $? >/tmp/companion-install.rc", command)
+
+    async def test_start_installer_falls_back_to_nohup_without_setsid(self) -> None:
+        shell, connection, _ = self._shell(_completed())
+        await shell.async_connect()
+
+        await shell.async_start_installer()
+
+        command = connection.run.await_args.args[0]
+        self.assertIn("command -v setsid", command)
+        self.assertIn("nohup", command)
+
+    async def test_a_command_that_never_returns_is_a_connection_error(self) -> None:
+        async def hang(*_args, **_kwargs):
+            await asyncio.sleep(10)
+
+        shell, connection, _ = self._shell()
+        connection.run = hang
+        await shell.async_connect()
+
+        with patch.object(installer, "RUN_TIMEOUT_SECONDS", 0.01):
+            with self.assertRaises(installer.ShellConnectError):
+                await shell.async_read_progress()
+
+    async def test_pair_local_reconnects_once_when_the_session_dropped(self) -> None:
+        body = {"ok": True, "pairing_state": "claimed", "repair_code": "r"}
+        shell, _, connector = self._shell(_completed(json.dumps(body) + chr(10) + "200"))
+        original = shell._run
+        calls = []
+
+        async def run(command, *, input=None):
+            calls.append(command)
+            if len(calls) == 1:
+                raise installer.ShellConnectError("gone")
+            return await original(command, input=input)
+
+        shell._run = run
+        await shell.async_connect()
+
+        payload = await shell.async_pair_local(None)
+
+        self.assertEqual(payload["repair_code"], "r")
+        self.assertEqual(connector.await_count, 2)
+        self.assertEqual(connector.await_args_list[1].args[3], "ssh-ed25519 AAAAkey")
+
+    async def test_pair_local_gives_up_when_the_reconnect_fails(self) -> None:
+        shell, _, connector = self._shell()
+        await shell.async_connect()
+        connector.side_effect = installer.ShellConnectError("down")
+
+        async def run(command, *, input=None):
+            raise installer.ShellConnectError("gone")
+
+        shell._run = run
+        with self.assertRaises(installer.ShellConnectError):
+            await shell.async_pair_local(None)
 
     async def test_start_installer_reports_a_failed_download(self) -> None:
         shell, _, _ = self._shell(_completed(exit_status=1))
@@ -259,6 +315,15 @@ class IntercomShellTest(unittest.IsolatedAsyncioTestCase):
 
 
 class AsyncsshConnectTest(unittest.IsolatedAsyncioTestCase):
+    async def test_the_session_sends_keepalives(self) -> None:
+        connection = MagicMock()
+        connection.get_server_host_key.return_value = None
+        with patch.object(installer.asyncssh, "connect", AsyncMock(return_value=connection)) as connect:
+            with self.assertRaises(installer.ShellConnectError):
+                await installer._asyncssh_connect("192.0.2.10", "root", "secret", None)
+        self.assertEqual(connect.await_args.kwargs["keepalive_interval"], 15)
+        self.assertEqual(connect.await_args.kwargs["keepalive_count_max"], 3)
+
     async def test_a_missing_host_key_is_an_error(self) -> None:
         connection = MagicMock()
         connection.get_server_host_key.return_value = None
