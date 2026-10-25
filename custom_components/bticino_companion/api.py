@@ -339,7 +339,9 @@ class CompanionApiClient:
     async def _async_json(response: ClientResponse) -> Any:
         try:
             return await response.json(content_type=None)
-        except (ClientError, ValueError):
+        except (ClientError, TimeoutError) as err:
+            raise CompanionConnectionError("unable to read the Companion response") from err
+        except ValueError:
             return {}
 
     @staticmethod
