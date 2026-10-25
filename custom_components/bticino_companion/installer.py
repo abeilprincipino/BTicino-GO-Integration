@@ -202,9 +202,13 @@ class IntercomShell:
     async def async_start_installer(self) -> None:
         """Download install.sh on the intercom and start it detached from the session."""
         # Spec section 8: setsid when the BusyBox has it, nohup otherwise.
+        # curl first: the intercom's BusyBox wget fails the TLS handshake with GitHub.
+        url = shlex.quote(INSTALL_SCRIPT_URL)
         command = (
             f"rm -f {INSTALL_LOG} {INSTALL_RC} && "
-            f"wget -qO {INSTALL_SCRIPT} {shlex.quote(INSTALL_SCRIPT_URL)} && "
+            "if command -v curl >/dev/null 2>&1; "
+            f"then curl -fsSL -o {INSTALL_SCRIPT} {url}; "
+            f"else wget -qO {INSTALL_SCRIPT} {url}; fi && "
             "detach=$(command -v setsid >/dev/null 2>&1 && echo setsid || echo nohup) && "
             f"($detach sh -c 'sh {INSTALL_SCRIPT} >{INSTALL_LOG} 2>&1; echo $? >{INSTALL_RC}' "
             "</dev/null >/dev/null 2>&1 &)"
