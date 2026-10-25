@@ -38,6 +38,15 @@
           "reboot_later": "Reboot later"
         }
       },
+      "reconfigure": {
+        "description": "Reinstall the Companion on the intercom over SSH. Its pairing with Home Assistant is kept, and the SSH password is never stored.",
+        "data": {
+          "host": "Intercom IP address or host name",
+          "username": "SSH username",
+          "password": "SSH password",
+          "accept_new_host_key": "The intercom was reflashed: accept its new SSH key"
+        }
+      },
       "reboot_failed": {
         "description": "The Companion did not accept the reboot request. Reboot the intercom by hand (switch its power off and on) before calls can reach the Companion, then submit to finish."
       },
@@ -61,7 +70,7 @@
       "cannot_connect": "Cannot connect to the Companion.",
       "ssh_cannot_connect": "Cannot connect to the intercom over SSH.",
       "invalid_auth": "The intercom refused the SSH username or password.",
-      "host_key_changed": "The intercom's SSH key changed since the Companion was installed. If you reflashed the intercom, tick the box to accept its new key.",
+      "host_key_changed": "The intercom's SSH key changed since the Companion was installed. If you reflashed the intercom, tick \"The intercom was reflashed: accept its new SSH key\".",
       "invalid_owner": "Choose a username and a password other than `companion`; the password needs at least 8 characters and at most 72 bytes."
     },
     "abort": {

@@ -21,6 +21,7 @@ from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from .api import CompanionApiClient, CompanionApiError, CompanionConnectionError
 from .const import (
+    CONF_ACCEPT_NEW_HOST_KEY,
     CONF_ACCESS_TOKEN,
     CONF_CLAIM_CODE,
     CONF_COMPANION_URL,
@@ -207,6 +208,27 @@ class CompanionConfigFlow(ConfigFlow, domain=DOMAIN):
                 return await self.async_step_install_run()
             errors["base"] = error
         return self.async_show_form(step_id="install", data_schema=_install_schema(user_input), errors=errors)
+
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Reinstall the Companion over SSH; this also replaces a lost token."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            host = str(user_input.get(CONF_HOST, "")).strip()
+            username = str(user_input.get(CONF_USERNAME, "")).strip() or DEFAULT_SSH_USERNAME
+            expected_host_key = None
+            if not user_input.get(CONF_ACCEPT_NEW_HOST_KEY):
+                expected_host_key = str(entry.data.get(CONF_SSH_HOST_KEY, "")).strip() or None
+            error = await self._async_open_shell(
+                host, username, str(user_input.get(CONF_PASSWORD, "")), expected_host_key
+            )
+            if error is None:
+                self._is_reconfigure = True
+                return await self.async_step_install_run()
+            errors["base"] = error
+        return self.async_show_form(
+            step_id="reconfigure", data_schema=_reconfigure_schema(entry.data, user_input), errors=errors
+        )
 
     async def async_step_install_run(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Run the installer on the intercom and follow it."""
@@ -491,6 +513,20 @@ def _install_schema(user_input: Mapping[str, Any] | None) -> vol.Schema:
                 CONF_USERNAME, default=str(user_input.get(CONF_USERNAME, DEFAULT_SSH_USERNAME))
             ): str,
             vol.Required(CONF_PASSWORD): str,
+        }
+    )
+
+
+def _reconfigure_schema(entry_data: Mapping[str, Any], user_input: Mapping[str, Any] | None) -> vol.Schema:
+    user_input = user_input or {}
+    host = urlsplit(str(entry_data.get(CONF_COMPANION_URL, ""))).hostname or ""
+    username = str(entry_data.get(CONF_SSH_USERNAME, "")) or DEFAULT_SSH_USERNAME
+    return vol.Schema(
+        {
+            vol.Required(CONF_HOST, default=str(user_input.get(CONF_HOST, host))): str,
+            vol.Required(CONF_USERNAME, default=str(user_input.get(CONF_USERNAME, username))): str,
+            vol.Required(CONF_PASSWORD): str,
+            vol.Optional(CONF_ACCEPT_NEW_HOST_KEY, default=False): bool,
         }
     )
 

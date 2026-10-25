@@ -399,3 +399,102 @@ class OwnerRulesTest(unittest.TestCase):
         self.assertFalse(config_flow._valid_owner("owner", "a" * 73))
         # 37 two-byte characters are 37 characters but 74 bytes.
         self.assertFalse(config_flow._valid_owner("owner", "é" * 37))
+
+
+class ReconfigureFlowTest(FlowTestCase):
+    def reconfigure_flow(self, host_key: str | None = HOST_KEY) -> CompanionConfigFlow:
+        flow = make_flow()
+        flow.context = {"source": "reconfigure", "entry_id": "entry-id"}
+        data = {
+            CONF_COMPANION_URL: "http://192.0.2.10:8080",
+            CONF_ACCESS_TOKEN: "old-token",
+            CONF_SSH_USERNAME: "root",
+        }
+        if host_key is not None:
+            data[CONF_SSH_HOST_KEY] = host_key
+        self.entry = MagicMock(unique_id=DEVICE_ID, data=data)
+        flow._get_reconfigure_entry = MagicMock(return_value=self.entry)
+        flow.async_update_reload_and_abort = MagicMock(
+            side_effect=lambda entry, **kwargs: {"type": "abort", "reason": "reconfigure_successful", **kwargs}
+        )
+        return flow
+
+    async def run_reconfigure(self, flow: CompanionConfigFlow) -> dict:
+        await flow.async_step_reconfigure(dict(INSTALL_INPUT))
+        await asyncio.wait([flow._install_task])
+        return await flow.async_step_install_run()
+
+    async def test_form_is_prefilled_from_the_entry(self) -> None:
+        result = await self.reconfigure_flow().async_step_reconfigure()
+
+        self.assertEqual((result["type"], result["step_id"]), ("form", "reconfigure"))
+        defaults = {
+            str(key): key.default() for key in result["data_schema"].schema if callable(getattr(key, "default", None))
+        }
+        self.assertEqual(defaults[CONF_HOST], "192.0.2.10")
+        self.assertEqual(defaults[CONF_USERNAME], "root")
+
+    async def test_reinstall_requires_the_stored_key_and_recovers_the_token(self) -> None:
+        shell = make_shell(
+            {"ok": True, "device_id": DEVICE_ID, "instance_id": INSTANCE_ID, "pairing_state": "claimed", "repair_code": "r-1"}
+        )
+        client, flow = make_client("claimed"), self.reconfigure_flow()
+        shell_class = MagicMock(return_value=shell)
+        with self.patched(shell, client), patch.object(config_flow, "IntercomShell", shell_class):
+            started = await flow.async_step_reconfigure(dict(INSTALL_INPUT))
+            self.assertEqual(started["type"], "progress")
+            await asyncio.wait([flow._install_task])
+            await flow.async_step_install_run()
+            menu = await flow.async_step_pair()
+            self.assertEqual(menu["step_id"], "reboot")
+            result = await flow.async_step_reboot_later()
+
+        self.assertEqual(shell_class.call_args.kwargs["expected_host_key"], HOST_KEY)
+        client.async_recover_bearer.assert_awaited_once_with("r-1")
+        self.assertEqual(result["reason"], "reconfigure_successful")
+        self.assertEqual(result["data_updates"][CONF_ACCESS_TOKEN], "new-token")
+
+    async def test_changed_host_key_is_refused(self) -> None:
+        shell = make_shell()
+        shell.async_connect.side_effect = config_flow.ShellHostKeyMismatch("changed")
+        with self.patched(shell, make_client()):
+            result = await self.reconfigure_flow().async_step_reconfigure(dict(INSTALL_INPUT))
+
+        self.assertEqual(result["errors"], {"base": "host_key_changed"})
+
+    async def test_accepting_a_new_key_connects_without_the_stored_one(self) -> None:
+        shell_class = MagicMock(return_value=make_shell())
+        flow = self.reconfigure_flow()
+        with self.patched(make_shell(), make_client()), patch.object(config_flow, "IntercomShell", shell_class):
+            await flow.async_step_reconfigure({**INSTALL_INPUT, "accept_new_host_key": True})
+            flow._install_task.cancel()
+
+        self.assertIsNone(shell_class.call_args.kwargs["expected_host_key"])
+
+    async def test_entry_without_a_stored_key_trusts_the_first_one(self) -> None:
+        shell_class = MagicMock(return_value=make_shell())
+        flow = self.reconfigure_flow(host_key=None)
+        with self.patched(make_shell(), make_client()), patch.object(config_flow, "IntercomShell", shell_class):
+            await flow.async_step_reconfigure(dict(INSTALL_INPUT))
+            flow._install_task.cancel()
+
+        self.assertIsNone(shell_class.call_args.kwargs["expected_host_key"])
+
+    async def test_a_different_companion_aborts(self) -> None:
+        client, flow = make_client(), self.reconfigure_flow()
+        client.async_get_pairing_status.return_value = {
+            "device_id": "other-device", "instance_id": INSTANCE_ID, "model": "C300X", "pairing_state": "claimed"
+        }
+        with self.patched(make_shell(), client):
+            await self.run_reconfigure(flow)
+            result = await flow.async_step_pair()
+
+        self.assertEqual((result["type"], result["reason"]), ("abort", "wrong_device"))
+
+    async def test_unreachable_intercom_stays_on_the_form(self) -> None:
+        shell = make_shell()
+        shell.async_connect.side_effect = ShellConnectError("down")
+        with self.patched(shell, make_client()):
+            result = await self.reconfigure_flow().async_step_reconfigure(dict(INSTALL_INPUT))
+
+        self.assertEqual((result["step_id"], result["errors"]), ("reconfigure", {"base": "ssh_cannot_connect"}))
