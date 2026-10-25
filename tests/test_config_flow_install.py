@@ -13,6 +13,7 @@ sys.path.insert(0, str(COMPONENT_PATH))
 
 try:
     from bticino_companion import config_flow
+    from bticino_companion.api import CompanionApiError, CompanionConnectionError
     from bticino_companion.config_flow import CompanionConfigFlow
     from bticino_companion.const import (
         CONF_ACCESS_TOKEN,
@@ -28,8 +29,10 @@ try:
         InstallerProgress,
         PairLocalError,
         ShellAuthError,
+        ShellConnectError,
     )
     from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
+    from homeassistant.data_entry_flow import AbortFlow
 except ImportError as err:
     if "homeassistant" not in str(err) and "asyncssh" not in str(err):
         raise
@@ -243,3 +246,156 @@ class InstallFlowTest(FlowTestCase):
 
         client.async_reboot.assert_not_awaited()
         self.assertEqual(entry["type"], "create_entry")
+
+
+class FinishAndDuplicateTest(FlowTestCase):
+    async def test_finish_sets_the_unique_id_without_raising_on_progress(self) -> None:
+        # The installed Companion advertises over mDNS, so the zeroconf flow holds the same id.
+        flow = make_flow()
+        with self.patched(make_shell(), make_client()):
+            await self.run_install(flow)
+            await flow.async_step_pair()
+            flow.async_set_unique_id.reset_mock()
+            await flow.async_step_reboot_later()
+
+        flow.async_set_unique_id.assert_awaited_once_with(DEVICE_ID, raise_on_progress=False)
+
+    async def test_already_configured_device_aborts_before_pairing(self) -> None:
+        shell, flow = make_shell(), make_flow()
+        flow._abort_if_unique_id_configured = MagicMock(side_effect=AbortFlow("already_configured"))
+        with self.patched(shell, make_client()):
+            await self.run_install(flow)
+            with self.assertRaises(AbortFlow):
+                await flow.async_step_pair()
+
+        flow.async_set_unique_id.assert_awaited_once_with(DEVICE_ID, raise_on_progress=False)
+        shell.async_pair_local.assert_not_awaited()
+        shell.async_close.assert_awaited()
+
+    async def test_reconfigure_does_not_abort_on_the_existing_entry(self) -> None:
+        shell, flow = make_shell(), make_flow()
+        flow._is_reconfigure = True
+        flow._get_reconfigure_entry = MagicMock(return_value=MagicMock(unique_id=DEVICE_ID))
+        flow._abort_if_unique_id_configured = MagicMock(side_effect=AbortFlow("already_configured"))
+        with self.patched(shell, make_client()):
+            await self.run_install(flow)
+            result = await flow.async_step_pair()
+
+        self.assertEqual(result["step_id"], "reboot")
+        shell.async_pair_local.assert_awaited_once_with(None)
+
+
+class RebootTest(FlowTestCase):
+    async def paired_flow(self) -> CompanionConfigFlow:
+        flow = make_flow()
+        await self.run_install(flow)
+        await flow.async_step_pair()
+        return flow
+
+    async def test_dropped_connection_after_a_reboot_request_is_success(self) -> None:
+        client = make_client()
+        client.async_reboot.side_effect = CompanionConnectionError("unable to contact Companion")
+        with self.patched(make_shell(), client):
+            flow = await self.paired_flow()
+            entry = await flow.async_step_reboot_now()
+
+        self.assertEqual(entry["type"], "create_entry")
+
+    async def test_refused_reboot_tells_the_user_to_reboot_by_hand(self) -> None:
+        client = make_client()
+        client.async_reboot.side_effect = CompanionApiError("Companion request failed (500)")
+        with self.patched(make_shell(), client):
+            flow = await self.paired_flow()
+            form = await flow.async_step_reboot_now()
+            self.assertEqual((form["type"], form["step_id"]), ("form", "reboot_failed"))
+            flow.async_create_entry.assert_not_called()
+
+            entry = await flow.async_step_reboot_failed({})
+
+        self.assertEqual(entry["type"], "create_entry")
+
+
+class FailurePathTest(FlowTestCase):
+    async def test_installed_but_unreachable_over_http_shows_install_failed(self) -> None:
+        client, flow = make_client(), make_flow()
+        client.async_get_pairing_status.side_effect = CompanionApiError("down")
+        with self.patched(make_shell(), client):
+            await self.run_install(flow)
+            form = await flow.async_step_pair()
+
+        self.assertEqual((form["type"], form["step_id"]), ("form", "install_failed"))
+        self.assertIn("does not answer", form["description_placeholders"]["failure"])
+
+    async def test_pair_local_refusal_is_a_pairing_error(self) -> None:
+        shell, flow = make_shell(), make_flow()
+        shell.async_pair_local.side_effect = PairLocalError(409, "pairing_error")
+        with self.patched(shell, make_client()):
+            await self.run_install(flow)
+            result = await flow.async_step_pair()
+
+        self.assertEqual((result["type"], result["reason"]), ("abort", "pairing_error"))
+        shell.async_close.assert_awaited()
+
+    async def test_ssh_failure_while_pairing_is_reported_as_ssh(self) -> None:
+        shell, flow = make_shell(), make_flow()
+        shell.async_pair_local.side_effect = ShellConnectError("reset")
+        with self.patched(shell, make_client()):
+            await self.run_install(flow)
+            result = await flow.async_step_pair()
+
+        self.assertEqual((result["type"], result["reason"]), ("abort", "ssh_cannot_connect"))
+
+    async def test_ssh_connect_failure_on_the_form_uses_the_ssh_error(self) -> None:
+        shell = make_shell()
+        shell.async_connect.side_effect = ShellConnectError("unreachable")
+        with self.patched(shell, make_client()):
+            result = await make_flow().async_step_install(dict(INSTALL_INPUT))
+
+        self.assertEqual(result["errors"], {"base": "ssh_cannot_connect"})
+
+    async def test_unexpected_installer_error_becomes_install_failed(self) -> None:
+        shell, flow = make_shell(), make_flow()
+        shell.async_wait_for_installer.side_effect = RuntimeError("boom ssh-secret")
+        with self.patched(shell, make_client()):
+            done = await self.run_install(flow)
+            form = await flow.async_step_install_failed()
+
+        self.assertEqual(done["step_id"], "install_failed")
+        self.assertNotIn("boom", form["description_placeholders"]["failure"])
+        self.assertNotIn("ssh-secret", form["description_placeholders"]["failure"])
+
+    async def test_cancelled_installer_task_without_removal_becomes_install_failed(self) -> None:
+        shell, flow = make_shell(), make_flow()
+        shell.async_wait_for_installer.side_effect = asyncio.CancelledError()
+        with self.patched(shell, make_client()):
+            done = await self.run_install(flow)
+
+        self.assertEqual(done["step_id"], "install_failed")
+
+    async def test_removing_the_flow_cancels_the_install_and_closes_ssh(self) -> None:
+        shell, flow = make_shell(), make_flow()
+        started = asyncio.Event()
+
+        async def hang(_on_progress):
+            started.set()
+            await asyncio.Event().wait()
+
+        shell.async_wait_for_installer.side_effect = hang
+        with self.patched(shell, make_client()):
+            await flow.async_step_install(dict(INSTALL_INPUT))
+            await started.wait()
+            task = flow._install_task
+            flow.async_remove()
+            await asyncio.wait([task])
+            await asyncio.sleep(0)
+
+        self.assertTrue(task.cancelled())
+        shell.async_close.assert_awaited()
+
+
+class OwnerRulesTest(unittest.TestCase):
+    def test_password_over_72_bytes_is_invalid(self) -> None:
+        self.assertTrue(config_flow._valid_owner("owner", "a" * 72))
+        self.assertFalse(config_flow._valid_owner("owner", "a" * 73))
+        # 37 two-byte characters are 37 characters but 74 bytes.
+        self.assertFalse(config_flow._valid_owner("owner", "é" * 37))

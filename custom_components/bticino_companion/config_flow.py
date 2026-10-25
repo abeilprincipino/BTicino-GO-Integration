@@ -1,3 +1,5 @@
+"""Configuration and reauthentication flow for BTicino Companion v3."""
+
 from __future__ import annotations
 
 import asyncio
@@ -13,10 +15,11 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import callback
+from homeassistant.data_entry_flow import AbortFlow
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
-from .api import CompanionApiClient, CompanionApiError
+from .api import CompanionApiClient, CompanionApiError, CompanionConnectionError
 from .const import (
     CONF_ACCESS_TOKEN,
     CONF_CLAIM_CODE,
@@ -33,6 +36,7 @@ from .const import (
     DEFAULT_PORT,
     DEFAULT_SSH_USERNAME,
     DOMAIN,
+    MAX_OWNER_PASSWORD_BYTES,
     MIN_OWNER_PASSWORD_LENGTH,
 )
 from .installer import (
@@ -49,6 +53,9 @@ _LOGGER = logging.getLogger(__name__)
 _HOSTNAME_RE = re.compile(
     r"(?=.{1,253}\Z)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*"
     r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\Z"
+)
+_UNEXPECTED_INSTALL_FAILURE = (
+    "FAIL: The installation stopped unexpectedly. See the Home Assistant log for details.",
 )
 _PAIRING_STATES = frozenset({"setup_required", "claimable", "claimed", "error"})
 
@@ -72,6 +79,7 @@ class CompanionConfigFlow(ConfigFlow, domain=DOMAIN):
         self._install_task: asyncio.Task[None] | None = None
         self._install_failure: tuple[str, ...] = ()
         self._owner: tuple[str, str] | None = None
+        self._removed = False
         self._auth_data: dict[str, Any] = {}
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -214,6 +222,16 @@ class CompanionConfigFlow(ConfigFlow, domain=DOMAIN):
         except InstallerFailed as err:
             self._install_failure = err.lines
             return self.async_show_progress_done(next_step_id="install_failed")
+        except asyncio.CancelledError:
+            if self._removed:
+                raise
+            _LOGGER.error("The Companion installation was cancelled unexpectedly")
+            self._install_failure = _UNEXPECTED_INSTALL_FAILURE
+            return self.async_show_progress_done(next_step_id="install_failed")
+        except Exception:  # noqa: BLE001 - any failure must end on the retry form, not a 500
+            _LOGGER.exception("The Companion installation failed unexpectedly")
+            self._install_failure = _UNEXPECTED_INSTALL_FAILURE
+            return self.async_show_progress_done(next_step_id="install_failed")
         return self.async_show_progress_done(next_step_id="pair")
 
     async def async_step_install_failed(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -234,8 +252,17 @@ class CompanionConfigFlow(ConfigFlow, domain=DOMAIN):
         except CompanionApiError:
             self._install_failure = (f"FAIL: The Companion was installed but does not answer at {url}.",)
             return await self.async_step_install_failed()
-        if self._is_reconfigure and self._device_id != self._get_reconfigure_entry().unique_id:
-            return await self._async_abort_install("wrong_device")
+        if self._is_reconfigure:
+            if self._device_id != self._get_reconfigure_entry().unique_id:
+                return await self._async_abort_install("wrong_device")
+        else:
+            # Stop before pair/local issues codes and the user goes through the reboot menu.
+            await self.async_set_unique_id(self._device_id, raise_on_progress=False)
+            try:
+                self._abort_if_unique_id_configured()
+            except AbortFlow:
+                await self._async_close_shell()
+                raise
         if self._pairing_state == "setup_required" and self._owner is None:
             return await self.async_step_owner()
         return await self._async_pair_over_ssh()
@@ -257,14 +284,25 @@ class CompanionConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_menu(step_id="reboot", menu_options=["reboot_now", "reboot_later"])
 
     async def async_step_reboot_now(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Ask the Companion to reboot the intercom."""
         client = CompanionApiClient(
             async_get_clientsession(self.hass), self._url, str(self._auth_data[CONF_ACCESS_TOKEN])
         )
         try:
             await client.async_reboot()
+        except CompanionConnectionError:
+            # An accepted reboot may cut the connection before the reply arrives.
+            _LOGGER.debug("Connection dropped after the Companion reboot request")
         except CompanionApiError as err:
-            _LOGGER.warning("Companion reboot request failed: %s", type(err).__name__)
+            _LOGGER.warning("Companion reboot request was refused: %s", err.code)
+            return await self.async_step_reboot_failed()
         return await self._async_finish_install()
+
+    async def async_step_reboot_failed(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Tell the user to reboot the intercom by hand, then finish."""
+        if user_input is not None:
+            return await self._async_finish_install()
+        return self.async_show_form(step_id="reboot_failed", data_schema=vol.Schema({}))
 
     async def async_step_reboot_later(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return await self._async_finish_install()
@@ -272,6 +310,7 @@ class CompanionConfigFlow(ConfigFlow, domain=DOMAIN):
     @callback
     def async_remove(self) -> None:
         """Stop following the installer and close SSH when the flow goes away."""
+        self._removed = True
         if self._install_task is not None:
             self._install_task.cancel()
         if self._shell is not None:
@@ -283,7 +322,7 @@ class CompanionConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> str | None:
         """Open the SSH session the install steps use; return an error key on failure."""
         if not host:
-            return "cannot_connect"
+            return "ssh_cannot_connect"
         shell = IntercomShell(host, username, password, expected_host_key=expected_host_key)
         try:
             await shell.async_connect()
@@ -293,7 +332,7 @@ class CompanionConfigFlow(ConfigFlow, domain=DOMAIN):
             return "host_key_changed"
         except ShellError as err:
             _LOGGER.warning("SSH connection to the intercom failed: %s", type(err).__name__)
-            return "cannot_connect"
+            return "ssh_cannot_connect"
         await self._async_close_shell()
         self._shell, self._host, self._ssh_username = shell, host, username
         return None
@@ -313,7 +352,7 @@ class CompanionConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def _async_pair_over_ssh(self) -> ConfigFlowResult:
         if self._shell is None:
-            return await self._async_abort_install("cannot_connect")
+            return await self._async_abort_install("ssh_cannot_connect")
         try:
             local = await self._shell.async_pair_local(self._owner)
         except PairLocalError as err:
@@ -324,8 +363,9 @@ class CompanionConfigFlow(ConfigFlow, domain=DOMAIN):
                 )
             _LOGGER.warning("Companion local pairing failed: %s %s", err.status, err.code)
             return await self._async_abort_install("pairing_error")
-        except ShellError:
-            return await self._async_abort_install("cannot_connect")
+        except ShellError as err:
+            _LOGGER.warning("SSH session to the intercom failed while pairing: %s", type(err).__name__)
+            return await self._async_abort_install("ssh_cannot_connect")
 
         if (
             str(local.get(CONF_DEVICE_ID, "")) != self._device_id
@@ -352,7 +392,8 @@ class CompanionConfigFlow(ConfigFlow, domain=DOMAIN):
         return await self.async_step_reboot()
 
     async def _async_finish_install(self) -> ConfigFlowResult:
-        await self.async_set_unique_id(self._device_id)
+        # The installed Companion advertises over mDNS, so a zeroconf flow may hold this id.
+        await self.async_set_unique_id(self._device_id, raise_on_progress=False)
         if self._is_reconfigure:
             self._abort_if_unique_id_mismatch(reason="wrong_device")
             return self.async_update_reload_and_abort(
@@ -463,6 +504,7 @@ def _valid_owner(username: str, password: str) -> bool:
     return (
         bool(username)
         and len(password) >= MIN_OWNER_PASSWORD_LENGTH
+        and len(password.encode()) <= MAX_OWNER_PASSWORD_BYTES
         and username != DEFAULT_OWNER_CREDENTIAL
         and password != DEFAULT_OWNER_CREDENTIAL
     )

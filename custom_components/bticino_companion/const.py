@@ -35,6 +35,7 @@ DEFAULT_SSH_USERNAME = "root"
 # The Companion web UI's bootstrap credentials, which an owner may not keep.
 DEFAULT_OWNER_CREDENTIAL = "companion"
 MIN_OWNER_PASSWORD_LENGTH = 8
+MAX_OWNER_PASSWORD_BYTES = 72
 DEFAULT_PORT = 8080
 
 API_PATH_PAIR_CHALLENGE = "/api/v3/pair/challenge"

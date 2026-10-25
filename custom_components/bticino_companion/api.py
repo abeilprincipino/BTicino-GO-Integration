@@ -41,6 +41,10 @@ class CompanionApiError(Exception):
         self.code = code
 
 
+class CompanionConnectionError(CompanionApiError):
+    """Raised when the Companion could not be reached or the connection broke."""
+
+
 class CompanionAuthError(CompanionApiError):
     """Raised when a Companion request is unauthorized."""
 
@@ -187,7 +191,7 @@ class CompanionApiClient:
             return response
         except ClientError as err:
             await self._async_webrtc_discard(session_id)
-            raise CompanionApiError("unable to contact Companion") from err
+            raise CompanionConnectionError("unable to contact Companion") from err
         except Exception:
             await self._async_webrtc_discard(session_id)
             raise
@@ -290,7 +294,7 @@ class CompanionApiClient:
                 image = await response.read()
                 return image or None
         except ClientError as err:
-            raise CompanionApiError("unable to contact Companion") from err
+            raise CompanionConnectionError("unable to contact Companion") from err
 
     async def _async_request(
         self,
@@ -329,7 +333,7 @@ class CompanionApiClient:
                 json=json_body,
             )
         except ClientError as err:
-            raise CompanionApiError("unable to contact Companion") from err
+            raise CompanionConnectionError("unable to contact Companion") from err
 
     @staticmethod
     async def _async_json(response: ClientResponse) -> Any:
