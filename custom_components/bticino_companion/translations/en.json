@@ -2,9 +2,53 @@
   "config": {
     "step": {
       "user": {
+        "description": "Connect to a Companion that is already running on the intercom, or install it on a rooted intercom over SSH.",
+        "menu_options": {
+          "connect": "Connect to an installed Companion",
+          "install": "Install the Companion on the intercom"
+        }
+      },
+      "connect": {
         "data": {
           "companion_url": "Companion URL"
         }
+      },
+      "install": {
+        "description": "The intercom must be rooted and reachable over SSH. The SSH password is used only during this setup and is never stored.",
+        "data": {
+          "host": "Intercom IP address or host name",
+          "username": "SSH username",
+          "password": "SSH password"
+        }
+      },
+      "install_failed": {
+        "description": "The installation did not complete:\n\n{failure}\n\nSubmit to run the installer again."
+      },
+      "owner": {
+        "description": "Choose the username and password of the Companion web interface. `companion` is not allowed for either, and the password needs at least 8 characters and at most 72 bytes.",
+        "data": {
+          "owner_username": "Web interface username",
+          "owner_password": "Web interface password"
+        }
+      },
+      "reboot": {
+        "description": "The Companion is installed and paired. The intercom must be rebooted before calls reach the Companion.",
+        "menu_options": {
+          "reboot_now": "Reboot the intercom now",
+          "reboot_later": "Reboot later"
+        }
+      },
+      "reconfigure": {
+        "description": "Reinstall the Companion on the intercom over SSH. Its pairing with Home Assistant is kept, and the SSH password is never stored.",
+        "data": {
+          "host": "Intercom IP address or host name",
+          "username": "SSH username",
+          "password": "SSH password",
+          "accept_new_host_key": "The intercom was reflashed: accept its new SSH key"
+        }
+      },
+      "reboot_failed": {
+        "description": "The Companion did not accept the reboot request. Reboot the intercom by hand (switch its power off and on) before calls can reach the Companion, then submit to finish."
       },
       "claim": {
         "description": "Open the Companion Home Assistant page and enter its initial claim code.",
@@ -19,14 +63,27 @@
         }
       }
     },
+    "progress": {
+      "install": "Installing the Companion on the intercom. This takes a few minutes."
+    },
     "error": {
-      "cannot_connect": "Cannot connect to the Companion."
+      "cannot_connect": "Cannot connect to the Companion.",
+      "ssh_cannot_connect": "Cannot connect to the intercom over SSH.",
+      "invalid_auth": "The intercom refused the SSH username or password.",
+      "host_key_changed": "The intercom's SSH key changed since the Companion was installed. If you reflashed the intercom, tick \"The intercom was reflashed: accept its new SSH key\".",
+      "invalid_owner": "Choose a username and a password other than `companion`; the password needs at least 8 characters and at most 72 bytes."
     },
     "abort": {
       "setup_required": "Finish the Companion WebUI setup before connecting Home Assistant.",
       "pairing_error": "Companion pairing needs attention. Open its Home Assistant page for details.",
       "wrong_device": "The Companion no longer matches this Home Assistant entry.",
-      "reauth_started": "Companion credentials need to be updated."
+      "reauth_started": "Companion credentials need to be updated.",
+      "cannot_connect": "Cannot connect to the Companion.",
+      "ssh_cannot_connect": "Cannot connect to the intercom over SSH.",
+      "already_in_progress": "A setup for this Companion is already in progress.",
+      "already_configured": "This Companion is already configured.",
+      "already_configured_install": "This Companion is already configured in Home Assistant. To reinstall it, open the existing entry and choose Reconfigure.",
+      "reconfigure_successful": "The Companion was reinstalled."
     }
   },
   "entity": {

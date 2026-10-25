@@ -26,6 +26,16 @@ CONF_COMPANION_URL = "companion_url"
 CONF_DEVICE_ID = "device_id"
 CONF_INSTANCE_ID = "instance_id"
 CONF_REPAIR_CODE = "repair_code"
+CONF_SSH_USERNAME = "ssh_username"
+CONF_SSH_HOST_KEY = "ssh_host_key"
+CONF_OWNER_USERNAME = "owner_username"
+CONF_OWNER_PASSWORD = "owner_password"
+CONF_ACCEPT_NEW_HOST_KEY = "accept_new_host_key"
+DEFAULT_SSH_USERNAME = "root"
+# The Companion web UI's bootstrap credentials, which an owner may not keep.
+DEFAULT_OWNER_CREDENTIAL = "companion"
+MIN_OWNER_PASSWORD_LENGTH = 8
+MAX_OWNER_PASSWORD_BYTES = 72
 DEFAULT_PORT = 8080
 
 API_PATH_PAIR_CHALLENGE = "/api/v3/pair/challenge"

@@ -41,6 +41,10 @@ class CompanionApiError(Exception):
         self.code = code
 
 
+class CompanionConnectionError(CompanionApiError):
+    """Raised when the Companion could not be reached or the connection broke."""
+
+
 class CompanionAuthError(CompanionApiError):
     """Raised when a Companion request is unauthorized."""
 
@@ -185,9 +189,9 @@ class CompanionApiClient:
                 },
             )
             return response
-        except ClientError as err:
+        except (ClientError, TimeoutError) as err:
             await self._async_webrtc_discard(session_id)
-            raise CompanionApiError("unable to contact Companion") from err
+            raise CompanionConnectionError("unable to contact Companion") from err
         except Exception:
             await self._async_webrtc_discard(session_id)
             raise
@@ -221,7 +225,7 @@ class CompanionApiClient:
             payload.update(reason="answered_elsewhere", leave=True)
         try:
             return await self._async_webrtc_message(session, "close", session_id, payload)
-        except ClientError as err:
+        except (ClientError, TimeoutError) as err:
             raise CompanionApiError("unable to close Companion WebRTC session") from err
         finally:
             await self._async_webrtc_discard(session_id)
@@ -289,8 +293,8 @@ class CompanionApiClient:
                     self._raise_for_status(response, await self._async_json(response))
                 image = await response.read()
                 return image or None
-        except ClientError as err:
-            raise CompanionApiError("unable to contact Companion") from err
+        except (ClientError, TimeoutError) as err:
+            raise CompanionConnectionError("unable to contact Companion") from err
 
     async def _async_request(
         self,
@@ -328,14 +332,16 @@ class CompanionApiClient:
                 headers=headers,
                 json=json_body,
             )
-        except ClientError as err:
-            raise CompanionApiError("unable to contact Companion") from err
+        except (ClientError, TimeoutError) as err:
+            raise CompanionConnectionError("unable to contact Companion") from err
 
     @staticmethod
     async def _async_json(response: ClientResponse) -> Any:
         try:
             return await response.json(content_type=None)
-        except (ClientError, ValueError):
+        except (ClientError, TimeoutError) as err:
+            raise CompanionConnectionError("unable to read the Companion response") from err
+        except ValueError:
             return {}
 
     @staticmethod

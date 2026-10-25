@@ -27,9 +27,10 @@ answer, talk, hang up, and unlock from a dashboard.
 
 ## Requirements
 
-- Home Assistant `2025.1.1` or later.
+- Home Assistant `2025.2.0` or later.
 - [HACS](https://hacs.xyz/), or manual installation of a custom component.
-- A rooted BTicino Classe 300X or Classe 100X running BTicino GO Companion. Install it first: see
+- A rooted BTicino Classe 300X or Classe 100X running BTicino GO Companion. Home Assistant can
+  install it over SSH (see [Setup](#setup)), or install it by hand: see
   [BTicino GO Companion — Installation](https://github.com/abeilprincipino/BTicino-GO-Companion#installation).
 - The companion reachable from Home Assistant, usually at `http://<intercom-ip>:8080`.
 - The companion WebUI setup completed (admin account created at `http://<intercom-ip>/`).
@@ -73,10 +74,29 @@ The intercom card is part of the integration: there is no separate card to insta
 
 [![Add Integration](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=bticino_companion)
 
+### Installing the Companion from Home Assistant
+
+On a rooted intercom reachable over SSH you do not need a terminal:
+
+1. **Settings → Devices & services → Add integration → BTicino Companion → Install the Companion on the intercom.**
+2. Enter the intercom's IP address and its SSH username (`root`) and password. The password is used
+   only during this setup and is never stored.
+3. Home Assistant installs the latest Companion release and shows its progress. If the installer
+   fails, its `FAIL:` lines are shown and you can run it again.
+4. On a new Companion, choose the username and password of its web interface (8 to 72 bytes).
+5. Reboot the intercom when asked: incoming calls reach the Companion only after a reboot.
+
+To reinstall later — for example to repair an installation — open the integration entry and choose
+**Reconfigure**. The SSH key of the intercom is checked against the one seen at installation; tick
+*The intercom was reflashed: accept its new SSH key* only if you really reflashed it.
+
+### Connecting to an installed Companion
+
 1. Go to `Settings > Devices & services`.
 2. The companion is discovered automatically over mDNS (`_bticomp._tcp.local.`). Click
    `Configure` on the discovered device. If it is not discovered, click `Add integration`, choose
-   `BTicino Companion`, and enter the companion URL, for example `http://192.168.1.50:8080`.
+   `BTicino Companion`, then `Connect to an installed Companion`, and enter the companion URL, for
+   example `http://192.168.1.50:8080`.
 3. Enter the code the flow asks for:
    - **Claim code** (`xxxx-xxxx`) — for a companion that has never been paired. It is shown on the
      Home Assistant page of the companion WebUI.
