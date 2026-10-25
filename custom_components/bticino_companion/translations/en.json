@@ -82,6 +82,7 @@
       "ssh_cannot_connect": "Cannot connect to the intercom over SSH.",
       "already_in_progress": "A setup for this Companion is already in progress.",
       "already_configured": "This Companion is already configured.",
+      "already_configured_install": "This Companion is already configured in Home Assistant. To reinstall it, open the existing entry and choose Reconfigure.",
       "reconfigure_successful": "The Companion was reinstalled."
     }
   },

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -89,6 +90,8 @@ def make_flow() -> CompanionConfigFlow:
     flow = CompanionConfigFlow()
     flow.hass = MagicMock()
     flow.hass.data = {}
+    # The install must be a background task; a plain async_create_task is not provided.
+    flow.hass.async_create_background_task = lambda coro, *args, **kwargs: loop.create_task(coro)
     flow.hass.async_create_task = lambda coro, *args, **kwargs: loop.create_task(coro)
     flow.context = {"source": "user"}
     flow.flow_id = "flow-id"
@@ -272,6 +275,20 @@ class FinishAndDuplicateTest(FlowTestCase):
         shell.async_pair_local.assert_not_awaited()
         shell.async_close.assert_awaited()
 
+    async def test_install_path_abort_uses_its_own_reason(self) -> None:
+        flow = make_flow()
+        flow._abort_if_unique_id_configured = MagicMock(side_effect=AbortFlow("x"))
+        with self.patched(make_shell(), make_client()):
+            await self.run_install(flow)
+            with self.assertRaises(AbortFlow):
+                await flow.async_step_pair()
+
+        flow._abort_if_unique_id_configured.assert_called_once_with(error="already_configured_install")
+        strings = json.loads(
+            (Path(config_flow.__file__).parent / "translations" / "en.json").read_text(encoding="utf-8")
+        )
+        self.assertIn("Reconfigure", strings["config"]["abort"]["already_configured_install"])
+
     async def test_reconfigure_does_not_abort_on_the_existing_entry(self) -> None:
         shell, flow = make_shell(), make_flow()
         flow._is_reconfigure = True
@@ -371,6 +388,37 @@ class FailurePathTest(FlowTestCase):
             done = await self.run_install(flow)
 
         self.assertEqual(done["step_id"], "install_failed")
+
+    async def test_install_runs_as_a_named_background_task(self) -> None:
+        shell, flow = make_shell(), make_flow()
+        calls = []
+        loop = asyncio.get_running_loop()
+
+        def background(coro, name, *args, **kwargs):
+            calls.append(name)
+            return loop.create_task(coro)
+
+        flow.hass.async_create_background_task = background
+        flow.hass.async_create_task = MagicMock(side_effect=AssertionError("not a background task"))
+        flow.hass.async_create_task = flow.hass.async_create_task
+        with self.patched(shell, make_client()):
+            await flow.async_step_install(dict(INSTALL_INPUT))
+            await asyncio.wait([flow._install_task])
+
+        self.assertEqual(calls, ["bticino_companion_install"])
+
+    async def test_ipv6_host_is_bracketed_in_the_url_but_bare_for_ssh(self) -> None:
+        shell, flow, client = make_shell(), make_flow(), make_client()
+        with self.patched(shell, client):
+            await flow.async_step_install({**INSTALL_INPUT, CONF_HOST: "fe80::1"})
+            await asyncio.wait([flow._install_task])
+            await flow.async_step_install_run()
+            await flow.async_step_pair()
+            shell_class = config_flow.IntercomShell
+            client_class = config_flow.CompanionApiClient
+
+        self.assertEqual(shell_class.call_args.args[0], "fe80::1")
+        self.assertEqual(client_class.call_args.args[1], f"http://[fe80::1]:{config_flow.DEFAULT_PORT}")
 
     async def test_removing_the_flow_cancels_the_install_and_closes_ssh(self) -> None:
         shell, flow = make_shell(), make_flow()

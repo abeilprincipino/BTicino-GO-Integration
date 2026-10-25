@@ -233,7 +233,10 @@ class CompanionConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_install_run(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Run the installer on the intercom and follow it."""
         if self._install_task is None:
-            self._install_task = self.hass.async_create_task(self._async_install())
+            # A background task: it may legitimately outlive a Home Assistant stop.
+            self._install_task = self.hass.async_create_background_task(
+                self._async_install(), "bticino_companion_install"
+            )
         if not self._install_task.done():
             return self.async_show_progress(
                 step_id="install_run", progress_action="install", progress_task=self._install_task
@@ -281,7 +284,8 @@ class CompanionConfigFlow(ConfigFlow, domain=DOMAIN):
             # Stop before pair/local issues codes and the user goes through the reboot menu.
             await self.async_set_unique_id(self._device_id, raise_on_progress=False)
             try:
-                self._abort_if_unique_id_configured()
+                # Not "already_configured": that text is shared with discovery.
+                self._abort_if_unique_id_configured(error="already_configured_install")
             except AbortFlow:
                 await self._async_close_shell()
                 raise
@@ -559,6 +563,12 @@ def _normalize_url(value: str) -> str:
     if not value:
         return ""
     if "://" not in value:
+        try:
+            ipaddress.IPv6Address(value)
+        except ValueError:
+            pass
+        else:
+            value = f"[{value}]"
         value = f"http://{value}"
     parsed = urlsplit(value)
     path = parsed.path.rstrip("/")
