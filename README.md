@@ -27,7 +27,7 @@ answer, talk, hang up, and unlock from a dashboard.
 
 ## Requirements
 
-- Home Assistant `2025.1.1` or later.
+- Home Assistant `2025.2.0` or later.
 - [HACS](https://hacs.xyz/), or manual installation of a custom component.
 - A rooted BTicino Classe 300X or Classe 100X running BTicino GO Companion. Install it first: see
   [BTicino GO Companion — Installation](https://github.com/abeilprincipino/BTicino-GO-Companion#installation).

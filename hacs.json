@@ -1,6 +1,6 @@
 {
   "name": "BTicino Companion",
-  "homeassistant": "2025.1.1",
+  "homeassistant": "2025.2.0",
   "render_readme": false,
   "zip_release": true,
   "filename": "bticino_companion.zip"
