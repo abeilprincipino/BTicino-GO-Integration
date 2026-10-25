@@ -12,6 +12,7 @@ CARD_RESOURCE_URL = f"{FRONTEND_PATH}/bticino-go-intercom-card.js?automatically-
 
 PLATFORMS: list[str] = [
     "camera",
+    "image",
     "sensor",
     "binary_sensor",
     "button",
@@ -52,6 +53,7 @@ API_PATH_SYSTEM_REBOOT = "/api/v3/system/reboot"
 API_PATH_SYSTEM_SERVICE_RESTART = "/api/v3/system/services/{service}/restart"
 API_PATH_WEBRTC_WS = "/api/v3/webrtc/ws"
 API_PATH_SNAPSHOT_LATEST = "/api/v3/entrypoints/{entrypoint_id}/snapshot/latest.jpg"
+API_PATH_SNAPSHOT_RING = "/api/v3/entrypoints/{entrypoint_id}/snapshot/ring.jpg"
 WEBSOCKET_PATH = "/api/v3/ws"
 
 WEBSOCKET_PING_INTERVAL_SECONDS = 20

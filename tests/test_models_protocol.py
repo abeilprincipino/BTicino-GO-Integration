@@ -132,6 +132,31 @@ class ModelsTest(unittest.TestCase):
         self.assertEqual(state.incoming_dialog_id, "abc@domain")
         self.assertEqual(state.call_state, "ringing")
 
+    def test_entrypoint_parses_snapshot_times(self) -> None:
+        entrypoint = Entrypoint.from_dict(
+            {
+                "id": "main",
+                "snapshot_updated_at": "2026-10-22T09:30:00.123Z",
+                "ring_snapshot_updated_at": "not a time",
+            }
+        )
+
+        self.assertEqual(entrypoint.snapshot_updated_at.isoformat(), "2026-10-22T09:30:00.123000+00:00")
+        self.assertIsNone(entrypoint.ring_snapshot_updated_at)
+        self.assertIsNone(Entrypoint.from_dict({"id": "main"}).snapshot_updated_at)
+
+    def test_entrypoint_snapshot_times_accept_missing_or_short_fraction(self) -> None:
+        entrypoint = Entrypoint.from_dict(
+            {
+                "id": "main",
+                "snapshot_updated_at": "2026-10-22T09:30:00Z",
+                "ring_snapshot_updated_at": "2026-10-22T09:30:00.12Z",
+            }
+        )
+
+        self.assertEqual(entrypoint.snapshot_updated_at.isoformat(), "2026-10-22T09:30:00+00:00")
+        self.assertEqual(entrypoint.ring_snapshot_updated_at.isoformat(), "2026-10-22T09:30:00.120000+00:00")
+
 
 class ProtocolTest(unittest.TestCase):
     def test_ping_message(self) -> None:

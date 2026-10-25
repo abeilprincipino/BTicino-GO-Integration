@@ -204,12 +204,12 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
         """End the active call. Idempotent on the Companion side."""
         await self._client.async_call_hangup()
 
-    async def async_close_card_webrtc_session(self, session_id: str) -> None:
+    async def async_close_card_webrtc_session(self, session_id: str, leave: bool = False) -> None:
         """Close a bundled-card session only when it belongs to this camera."""
         if session_id not in self._active_webrtc_sessions:
             return
         self._active_webrtc_sessions.remove(session_id)
-        await self._async_close_webrtc_session(session_id)
+        await self._async_close_webrtc_session(session_id, leave=leave)
 
     @callback
     def close_webrtc_session(self, session_id: str) -> None:
@@ -227,9 +227,11 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
             f"close Companion WebRTC session {session_id}",
         )
 
-    async def _async_close_webrtc_session(self, session_id: str) -> None:
+    async def _async_close_webrtc_session(self, session_id: str, *, leave: bool = False) -> None:
+        # Passed only when set, so the ordinary close stays the call it always was.
+        kwargs = {"leave": True} if leave else {}
         try:
-            await self._client.async_webrtc_close(session_id=session_id)
+            await self._client.async_webrtc_close(session_id=session_id, **kwargs)
         except CompanionApiError as err:
             _LOGGER.debug("Unable to close Companion WebRTC session %s: %s", session_id, err)
 
