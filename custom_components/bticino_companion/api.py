@@ -189,7 +189,7 @@ class CompanionApiClient:
                 },
             )
             return response
-        except ClientError as err:
+        except (ClientError, TimeoutError) as err:
             await self._async_webrtc_discard(session_id)
             raise CompanionConnectionError("unable to contact Companion") from err
         except Exception:
@@ -225,7 +225,7 @@ class CompanionApiClient:
             payload.update(reason="answered_elsewhere", leave=True)
         try:
             return await self._async_webrtc_message(session, "close", session_id, payload)
-        except ClientError as err:
+        except (ClientError, TimeoutError) as err:
             raise CompanionApiError("unable to close Companion WebRTC session") from err
         finally:
             await self._async_webrtc_discard(session_id)
@@ -293,7 +293,7 @@ class CompanionApiClient:
                     self._raise_for_status(response, await self._async_json(response))
                 image = await response.read()
                 return image or None
-        except ClientError as err:
+        except (ClientError, TimeoutError) as err:
             raise CompanionConnectionError("unable to contact Companion") from err
 
     async def _async_request(
@@ -332,7 +332,7 @@ class CompanionApiClient:
                 headers=headers,
                 json=json_body,
             )
-        except ClientError as err:
+        except (ClientError, TimeoutError) as err:
             raise CompanionConnectionError("unable to contact Companion") from err
 
     @staticmethod
