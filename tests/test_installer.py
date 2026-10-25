@@ -102,7 +102,9 @@ class IntercomShellTest(unittest.IsolatedAsyncioTestCase):
         await shell.async_start_installer()
 
         command = connection.run.await_args.args[0]
-        self.assertIn("wget -qO /tmp/companion-install.sh", command)
+        # The intercom's BusyBox wget fails TLS with GitHub; curl goes first.
+        self.assertIn("curl -fsSL -o /tmp/companion-install.sh", command)
+        self.assertLess(command.index("curl -fsSL"), command.index("wget -qO /tmp/companion-install.sh"))
         self.assertIn("$detach sh -c", command)
         self.assertIn("echo $? >/tmp/companion-install.rc", command)
 
