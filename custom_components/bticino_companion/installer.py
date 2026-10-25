@@ -264,7 +264,7 @@ class IntercomShell:
             body = {"owner": {"username": owner[0], "password": owner[1]}}
         # The body goes on stdin so that the password never shows in a process list.
         result = await self._run(
-            "curl -sS -X POST -H 'Content-Type: application/json' --data-binary @- "
+            "curl -sS --max-time 30 -X POST -H 'Content-Type: application/json' --data-binary @- "
             f"-w '\\n%{{http_code}}' {PAIR_LOCAL_URL}",
             input=json.dumps(body),
         )

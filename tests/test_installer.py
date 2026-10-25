@@ -180,6 +180,15 @@ class IntercomShellTest(unittest.IsolatedAsyncioTestCase):
             {"owner": {"username": "owner", "password": "correct-horse"}},
         )
 
+    async def test_pair_local_bounds_the_request_time(self) -> None:
+        body = {"ok": True, "pairing_state": "claimed", "repair_code": "r"}
+        shell, connection, _ = self._shell(_completed(json.dumps(body) + "\n200"))
+        await shell.async_connect()
+
+        await shell.async_pair_local(None)
+
+        self.assertIn("--max-time 30", connection.run.await_args.args[0])
+
     async def test_pair_local_without_owner_sends_an_empty_object(self) -> None:
         body = {"ok": True, "pairing_state": "claimed", "repair_code": "r"}
         shell, connection, _ = self._shell(_completed(json.dumps(body) + "\n200"))
