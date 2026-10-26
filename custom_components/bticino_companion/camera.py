@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
+from pathlib import Path
 from typing import Any
 
 from homeassistant.components.camera import Camera, CameraEntityFeature, WebRTCAnswer, WebRTCError, WebRTCSendMessage
+from homeassistant.components.http.auth import async_sign_path
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback, async_get_current_platform
@@ -15,7 +17,7 @@ from webrtc_models import RTCIceCandidateInit
 
 from . import IntegrationRuntime
 from .api import CompanionApiError
-from .const import DATA_CAMERA_ENTITIES
+from .const import CLIP_URL_EXPIRY_SECONDS, DATA_CAMERA_ENTITIES
 from .coordinator import CompanionCoordinator
 from .device_info import device_info
 from .entity import CompanionAvailabilityMixin
@@ -120,6 +122,27 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
         archive = getattr(self._entry.runtime_data, "clip_archive", None)
         latest = archive.latest(self._entrypoint_id) if archive is not None else None
         return latest if isinstance(latest, datetime) else None
+
+    async def async_handle_card_ring_clips(
+        self, limit: int, refresh_token_id: str | None
+    ) -> list[dict[str, str | None]]:
+        """List the latest archived ring clips with URLs the card can play."""
+        archive = getattr(self._entry.runtime_data, "clip_archive", None)
+        if archive is None:
+            return []
+        expiry = timedelta(seconds=CLIP_URL_EXPIRY_SECONDS)
+
+        def sign(path: Path) -> str:
+            return async_sign_path(self.hass, archive.url_path(path), expiry, refresh_token_id=refresh_token_id)
+
+        return [
+            {
+                "recorded_at": clip.recorded_at.isoformat(),
+                "url": sign(clip.path),
+                "poster_url": sign(clip.poster) if clip.poster else None,
+            }
+            for clip in await archive.async_list(self._entrypoint_id, limit)
+        ]
 
     async def async_handle_async_webrtc_offer(
         self, offer_sdp: str, session_id: str, send_message: WebRTCSendMessage
