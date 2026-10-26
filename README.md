@@ -20,6 +20,7 @@ answer, talk, hang up, and unlock from a dashboard.
 - [Setup](#setup)
 - [Intercom Card](#intercom-card)
 - [Doorbell notifications with the picture](#doorbell-notifications-with-the-picture)
+- [Ring clips](#ring-clips)
 - [Entities](#entities)
 - [Updating](#updating)
 - [Troubleshooting](#troubleshooting)
@@ -128,6 +129,7 @@ name: Front Door
 | --- | --- | --- |
 | `camera` | yes | The companion camera entity of the entrypoint to show. |
 | `name` | no | Card title. Defaults to the camera's friendly name. |
+| `clips` | no | Number of recent ring clips shown under the controls, 0–50 (default 10). 0 hides them. |
 
 What the card does:
 
@@ -174,6 +176,51 @@ automation:
 
 If the Companion cannot open the stream during a ring, no picture is taken and the entity does not
 change, so no notification is sent for that ring.
+
+## Ring clips
+
+On every doorbell ring the Companion records the first 15 seconds of video, also when nobody
+answers and no card is open. The recording stops early when someone answers.
+
+- **Video only.** The intercom sends no audio before the call is answered.
+- **It starts 2–3 seconds after the ring**: the time to open the stream and receive the first full
+  frame.
+- **The intercom keeps only the last clip of each entrypoint.** Home Assistant downloads each new clip
+  into **Media › My media › bticino_go**, with the ring picture as its thumbnail when it was taken
+  within a minute of the clip. If Home Assistant is
+  offline at the ring, the clip is downloaded when it reconnects, unless another ring replaced it.
+- **Retention:** Settings › Devices & services › BTicino Companion › Configure › *Ring clip
+  retention (days)*. Default 30; 0 keeps clips forever.
+- The intercom card shows the latest clips under its controls; tap one to play it. Set
+  `clips: 0` to hide them, or another number up to 50:
+
+  ```yaml
+  type: custom:bticino-go-intercom-card
+  camera: camera.main_door
+  clips: 6
+  ```
+
+Each saved clip fires the event `bticino_companion_ring_clip_saved` with `entrypoint_id`,
+`recorded_at`, `path`, `poster_path` and `media_content_id`. Example notification with the ring
+picture and a link to the clips:
+
+```yaml
+automation:
+  - alias: Doorbell clip saved
+    triggers:
+      - trigger: event
+        event_type: bticino_companion_ring_clip_saved
+    actions:
+      - action: notify.mobile_app_my_phone
+        data:
+          title: Doorbell
+          message: "New ring clip at {{ as_timestamp(trigger.event.data.recorded_at) | timestamp_custom('%H:%M') }}"
+          data:
+            image: /api/image_proxy/image.main_door_last_doorbell_ring
+            url: /media-browser/browser
+```
+
+Replace `image.main_door_last_doorbell_ring` with your "Last doorbell ring" image entity, and `notify.mobile_app_my_phone` with your own notify service.
 
 ## Entities
 
