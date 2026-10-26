@@ -369,6 +369,8 @@ class BTicinoGoIntercomCard extends HTMLElement {
     video.addEventListener("ended", () => replay.classList.remove("hidden"));
     video.addEventListener("play", () => replay.classList.add("hidden"));
     video.addEventListener("error", () => {
+      // An error from a video that was replaced must not fail the new player.
+      if (layer.querySelector("video") !== video) return;
       // A file purged meanwhile, or an expired URL: say so and refresh the list.
       video.classList.add("hidden");
       layer.querySelector(".playback-error").classList.remove("hidden");

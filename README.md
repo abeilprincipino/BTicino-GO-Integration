@@ -183,6 +183,8 @@ On every doorbell ring the Companion records the first 15 seconds of video, also
 answers and no card is open. The recording stops early when someone answers.
 
 - **Video only.** The intercom sends no audio before the call is answered.
+- **It needs the inbound SIP call**, like the ring picture: the Flexisip provisioning done by the
+  installer. Without it no clip is recorded.
 - **It starts 2–3 seconds after the ring**: the time to open the stream and receive the first full
   frame.
 - **The intercom keeps only the last clip of each entrypoint.** Home Assistant downloads each new clip

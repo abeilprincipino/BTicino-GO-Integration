@@ -168,7 +168,7 @@ async def _handle_ring_clips(hass: HomeAssistant, connection, msg: dict[str, Any
         clips = await _camera_for_message(hass, msg).async_handle_card_ring_clips(
             int(msg["limit"]), connection.refresh_token_id
         )
-    except (CompanionApiError, HomeAssistantError, ValueError, OSError) as err:
+    except (CompanionApiError, HomeAssistantError, ValueError) as err:
         connection.send_error(msg["id"], "ring_clips_failed", str(err))
         return
     connection.send_result(msg["id"], {"clips": clips})

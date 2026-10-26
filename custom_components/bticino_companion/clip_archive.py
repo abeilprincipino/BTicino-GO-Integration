@@ -167,6 +167,11 @@ class RingClipArchiver:
             folder = self._folder(entrypoint.id)
             if folder is None:
                 return
+            if self._retention_days > 0 and recorded < dt_util.utcnow() - timedelta(days=self._retention_days):
+                # Already past retention: the purge would delete it again, so
+                # after a restart it is neither downloaded nor announced.
+                self._checked[entrypoint.id] = recorded
+                return
             clip_path = folder / f"{dt_util.as_local(recorded).strftime(NAME_FORMAT)}{CLIP_SUFFIX}"
             try:
                 exists = await self._hass.async_add_executor_job(clip_path.exists)

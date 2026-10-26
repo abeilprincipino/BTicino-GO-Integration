@@ -117,6 +117,19 @@ class RingClipArchiverTest(unittest.IsolatedAsyncioTestCase):
         )
         self.coordinator.async_update_listeners.assert_called()
 
+    async def test_does_not_archive_a_clip_past_retention(self) -> None:
+        self.entry.options = {CONF_CLIP_RETENTION_DAYS: 7}
+        archiver = self._archiver()
+        await archiver.async_start()
+        expired = dt_util.utcnow() - timedelta(days=10)
+
+        for _ in range(2):
+            await self._ring(archiver, ring_clip_recorded_at=expired.isoformat())
+
+        self.client.async_entrypoint_clip_ring.assert_not_awaited()
+        self.hass.bus.async_fire.assert_not_called()
+        self.assertFalse(self.folder.exists())
+
     async def test_does_not_download_a_clip_twice(self) -> None:
         archiver = self._archiver()
         await archiver.async_start()
