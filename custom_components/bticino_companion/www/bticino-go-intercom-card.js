@@ -26,7 +26,7 @@ const CARD_STYLES = `
   .clips { border-top: 1px solid var(--divider-color); padding: 4px 14px 14px; }
   .clips-header { align-items: baseline; color: var(--secondary-text-color); display: flex; font-size: 13px; font-weight: 600; justify-content: space-between; padding-top: 10px; }
   .clips-header .count { font-size: 12px; font-weight: 400; }
-  .strip { display: flex; gap: 10px; overflow-x: auto; padding: 8px 2px 2px; scroll-behavior: smooth; scroll-padding: 0 2px; scroll-snap-type: x mandatory; scrollbar-width: none; }
+  .strip { display: flex; gap: 10px; overflow-x: auto; margin: 0 -4px; padding: 8px 4px 2px; scroll-behavior: smooth; scroll-padding: 0 4px; scroll-snap-type: x mandatory; scrollbar-width: none; }
   .strip::-webkit-scrollbar { display: none; }
   .strip.fade { -webkit-mask-image: linear-gradient(to right, #000 85%, transparent); mask-image: linear-gradient(to right, #000 85%, transparent); }
   .clip-item { flex: 0 0 auto; scroll-snap-align: start; }
@@ -101,8 +101,10 @@ class BTicinoGoIntercomCard extends HTMLElement {
     this._clipsReload = false;
     // recorded_at of the clip in the player, undefined when none plays.
     this._playing = undefined;
+    // The player's video failed: keep "Clip unavailable" up until the user closes it.
+    this._playbackFailed = false;
     this._onKeydown = (event) => {
-      if (event.key === "Escape" && this._playing) this._closePlayback();
+      if (event.key === "Escape" && !event.defaultPrevented && this._playing) this._closePlayback();
     };
   }
 
@@ -231,7 +233,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
     const key = this._cameraState()?.attributes?.bticino_last_ring_clip_at || "";
     if (key === this._clipsKey) return;
     this._clipsKey = key;
-    this._loadClips();
+    this._loadClips().catch(() => {});
   }
 
   // One request at a time; a reload asked meanwhile runs once the current one ends.
@@ -246,7 +248,8 @@ class BTicinoGoIntercomCard extends HTMLElement {
 
   async _fetchClips() {
     this._clipsLoading = true;
-    this._renderClips();
+    // Skeletons only on the first load: a reload keeps the strip as it is.
+    if (!this._clipsLoaded) this._renderClips();
     try {
       do {
         this._clipsReload = false;
@@ -262,7 +265,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
       this._clipsLoading = false;
       this._clipsLoaded = true;
     }
-    if (this._playing && !this._clips.some((clip) => clip.recorded_at === this._playing)) this._closePlayback();
+    if (this._playing && !this._playbackFailed && !this._clips.some((clip) => clip.recorded_at === this._playing)) this._closePlayback();
     this._renderClips();
   }
 
@@ -277,6 +280,8 @@ class BTicinoGoIntercomCard extends HTMLElement {
       return;
     }
     const scroll = section.querySelector(".strip")?.scrollLeft || 0;
+    const focused = this.shadowRoot.activeElement;
+    const focusedKey = focused && section.contains(focused) && focused.classList.contains("clip") ? focused.dataset.recordedAt : undefined;
     const items = loading
       ? Array.from({ length: 3 }, () => `<div class="clip-item skeleton" role="listitem" aria-hidden="true"><div class="thumb"></div><div class="label"><span class="day">&nbsp;</span><span class="time">&nbsp;</span></div></div>`).join("")
       : this._clips.map((clip) => {
@@ -285,16 +290,19 @@ class BTicinoGoIntercomCard extends HTMLElement {
         const poster = clip.poster_url
           ? `<img src="${this._escape(this._hass.hassUrl(clip.poster_url))}" alt="" loading="lazy" />`
           : `<ha-icon class="no-poster" icon="mdi:video"></ha-icon>`;
-        return `<div class="clip-item" role="listitem"><button class="clip ${playing ? "playing" : ""}" data-recorded-at="${this._escape(clip.recorded_at)}" aria-label="Play ring clip, ${this._escape(day)} ${this._escape(time)}" aria-current="${playing}"><div class="thumb">${poster}<span class="badge"><ha-icon icon="${playing ? "mdi:equalizer" : "mdi:play"}"></ha-icon></span></div><div class="label"><span class="day">${this._escape(playing ? "Playing" : day)}</span><span class="time">${this._escape(time)}</span></div></button></div>`;
+        return `<div class="clip-item" role="listitem"><button class="clip ${playing ? "playing" : ""}" data-recorded-at="${this._escape(clip.recorded_at)}" aria-label="Play ring clip, ${this._escape(day)} ${this._escape(time)}" aria-current="${playing}"><span class="thumb">${poster}<span class="badge"><ha-icon icon="${playing ? "mdi:equalizer" : "mdi:play"}"></ha-icon></span></span><span class="label"><span class="day">${this._escape(playing ? "Playing" : day)}</span><span class="time">${this._escape(time)}</span></span></button></div>`;
       }).join("");
     section.innerHTML = `<div class="clips-header"><span>Recent rings</span><span class="count">${loading ? "" : this._clips.length}</span></div><div class="strip" role="list">${items}</div>`;
     const strip = section.querySelector(".strip");
-    strip.scrollLeft = scroll;
+    strip.scrollTo({ left: scroll, behavior: "instant" });
     strip.addEventListener("scroll", () => this._updateFade(strip), { passive: true });
     strip.querySelectorAll("button.clip").forEach((button) => {
       button.addEventListener("click", () => this._play(button.dataset.recordedAt));
     });
     this._updateFade(strip);
+    if (focusedKey !== undefined) {
+      Array.from(strip.querySelectorAll("button.clip")).find((button) => button.dataset.recordedAt === focusedKey)?.focus({ preventScroll: true });
+    }
   }
 
   // The right edge fades while more clips are off screen.
@@ -317,7 +325,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
       day = date.toLocaleDateString(language, { day: "numeric", month: "short" });
     }
     const format = this._hass?.locale?.time_format;
-    const hour12 = format === "12" ? { hour12: true } : format === "24" ? { hour12: false } : {};
+    const hour12 = format === "12" ? { hour12: true } : format === "24" ? { hourCycle: "h23" } : {};
     const time = date.toLocaleTimeString(language, { hour: "2-digit", minute: "2-digit", ...hour12 });
     return { day, time };
   }
@@ -326,10 +334,15 @@ class BTicinoGoIntercomCard extends HTMLElement {
     // The doorbell comes first: no clip while it rings or a call is up.
     if (this._isRinging() || this._pc || this._connecting || this._callState() === "active") return;
     // Signed URLs last an hour: reload a list older than 50 minutes first.
-    if (Date.now() - this._clipsLoadedAt > 50 * 60 * 1000) await this._loadClips();
+    if (Date.now() - this._clipsLoadedAt > 50 * 60 * 1000) {
+      await this._loadClips();
+      // A ring, live view or answer may have started during the reload.
+      if (this._isRinging() || this._pc || this._connecting || this._callState() === "active") return;
+    }
     const clip = this._clips.find((item) => item.recorded_at === recordedAt);
     if (!clip) return;
     this._playing = recordedAt;
+    this._playbackFailed = false;
     this._renderPlayback(clip);
     this._renderClips();
   }
@@ -359,7 +372,8 @@ class BTicinoGoIntercomCard extends HTMLElement {
       // A file purged meanwhile, or an expired URL: say so and refresh the list.
       video.classList.add("hidden");
       layer.querySelector(".playback-error").classList.remove("hidden");
-      this._loadClips();
+      this._playbackFailed = true;
+      this._loadClips().catch(() => {});
     });
     replay.addEventListener("click", () => {
       video.currentTime = 0;
@@ -371,6 +385,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
   _closePlayback() {
     if (!this._playing) return;
     this._playing = undefined;
+    this._playbackFailed = false;
     this._renderPlayback();
     this._renderClips();
   }
