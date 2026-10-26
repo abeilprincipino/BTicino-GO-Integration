@@ -6,15 +6,22 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 COMPONENT_PATH = Path(__file__).parents[1] / "custom_components"
 sys.path.insert(0, str(COMPONENT_PATH))
 
 try:
-    from bticino_companion.config_flow import CompanionConfigFlow, _normalize_url, _zeroconf_url
+    from bticino_companion.config_flow import (
+        CompanionConfigFlow,
+        CompanionOptionsFlow,
+        _normalize_url,
+        _zeroconf_url,
+        options_schema,
+    )
     from bticino_companion.const import (
         CONF_ACCESS_TOKEN,
+        CONF_CLIP_RETENTION_DAYS,
         CONF_COMPANION_URL,
         CONF_DEVICE_ID,
         CONF_INSTANCE_ID,
@@ -318,3 +325,32 @@ class ZeroconfConfigFlowTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, {"type": "abort", "reason": "cannot_connect"})
         flow.async_set_unique_id.assert_not_called()
+
+
+class OptionsFlowTest(unittest.IsolatedAsyncioTestCase):
+    def test_schema_defaults_and_range(self) -> None:
+        schema = options_schema(30)
+
+        self.assertEqual(schema({}), {CONF_CLIP_RETENTION_DAYS: 30})
+        self.assertEqual(schema({CONF_CLIP_RETENTION_DAYS: "0"}), {CONF_CLIP_RETENTION_DAYS: 0})
+        for invalid in (-1, 3651):
+            with self.subTest(invalid=invalid), self.assertRaises(Exception):
+                schema({CONF_CLIP_RETENTION_DAYS: invalid})
+
+    async def test_form_shows_the_current_retention(self) -> None:
+        flow = CompanionOptionsFlow()
+        flow.async_show_form = MagicMock(return_value="form")
+        entry = SimpleNamespace(options={CONF_CLIP_RETENTION_DAYS: 7})
+
+        with patch.object(CompanionOptionsFlow, "config_entry", new_callable=PropertyMock, return_value=entry):
+            self.assertEqual(await flow.async_step_init(), "form")
+
+        schema = flow.async_show_form.call_args.kwargs["data_schema"]
+        self.assertEqual(schema({}), {CONF_CLIP_RETENTION_DAYS: 7})
+
+    async def test_saving_stores_the_option(self) -> None:
+        flow = CompanionOptionsFlow()
+        flow.async_create_entry = MagicMock(return_value="created")
+
+        self.assertEqual(await flow.async_step_init({CONF_CLIP_RETENTION_DAYS: 5}), "created")
+        flow.async_create_entry.assert_called_once_with(data={CONF_CLIP_RETENTION_DAYS: 5})

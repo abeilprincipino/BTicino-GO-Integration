@@ -71,6 +71,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         clip_archive=clip_archive,
     )
     entry.runtime_data = runtime
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
     await _async_register_frontend(hass)
     dynamic_entities.async_start()
@@ -115,3 +116,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await runtime.clip_archive.async_stop()
         await runtime.coordinator.async_stop()
     return True
+
+
+async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """A new retention takes effect through a reload, which restarts the archive."""
+    await hass.config_entries.async_reload(entry.entry_id)
