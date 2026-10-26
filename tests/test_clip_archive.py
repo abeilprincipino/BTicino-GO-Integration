@@ -19,13 +19,14 @@ try:
     from bticino_companion.clip_archive import RingClipArchiver
     from bticino_companion.const import CONF_CLIP_RETENTION_DAYS, EVENT_RING_CLIP_SAVED
     from bticino_companion.models import CompanionState, Diagnostics, Entrypoint, UpdateInfo
+    from homeassistant.util import dt as dt_util
 except ImportError as err:
     if "homeassistant" not in str(err):
         raise
     raise unittest.SkipTest("homeassistant is not installed") from err
 
 RECORDED = datetime(2026, 10, 26, 9, 30, 0, tzinfo=timezone.utc)
-CLIP_NAME = "2026-10-26_09-30-00"
+CLIP_NAME = dt_util.as_local(RECORDED).strftime("%Y-%m-%d_%H-%M-%S")
 
 
 class _FakeHass:
@@ -228,3 +229,122 @@ class RingClipArchiverTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             archiver.url_path(clips[0].path), "/media/local/bticino_go/device_1/main/2026-10-26_09-32-00.mp4"
         )
+
+    async def test_publishes_the_newest_clip_at_start(self) -> None:
+        self.folder.mkdir(parents=True)
+        path = self.folder / "a.mp4"
+        path.write_bytes(b"x")
+        os.utime(path, (RECORDED.timestamp(), RECORDED.timestamp()))
+
+        await self._archiver().async_start()
+
+        self.coordinator.async_update_listeners.assert_called_once_with()
+
+    async def test_stays_quiet_at_start_without_clips(self) -> None:
+        await self._archiver().async_start()
+
+        self.coordinator.async_update_listeners.assert_not_called()
+
+    async def test_purge_refreshes_the_newest_clip(self) -> None:
+        self.entry.options = {CONF_CLIP_RETENTION_DAYS: 7}
+        self.folder.mkdir(parents=True)
+        path = self.folder / "a.mp4"
+        path.write_bytes(b"x")
+        recent = (datetime.now(timezone.utc) - timedelta(days=1)).timestamp()
+        os.utime(path, (recent, recent))
+        archiver = self._archiver()
+        await archiver.async_start()
+        self.assertIsNotNone(archiver.latest("main"))
+        self.coordinator.async_update_listeners.reset_mock()
+
+        expired = (datetime.now(timezone.utc) - timedelta(days=8)).timestamp()
+        os.utime(path, (expired, expired))
+        await archiver._async_purge()
+
+        self.assertFalse(path.exists())
+        self.assertIsNone(archiver.latest("main"))
+        self.coordinator.async_update_listeners.assert_called_once_with()
+
+    async def test_filesystem_errors_do_not_escape(self) -> None:
+        self.entry.options = {CONF_CLIP_RETENTION_DAYS: 7}
+        archiver = self._archiver()
+        with patch("bticino_companion.clip_archive._scan_latest", side_effect=OSError("denied")), patch(
+            "bticino_companion.clip_archive._purge", side_effect=OSError("denied")
+        ):
+            await archiver.async_start()
+            await archiver._async_purge_interval(datetime.now(timezone.utc))
+        with patch("bticino_companion.clip_archive._list_clips", side_effect=OSError("denied")):
+            self.assertEqual(await archiver.async_list("main", 10), [])
+
+        self.assertIsNone(archiver.latest("main"))
+        self.coordinator.async_add_listener.assert_called_once()
+
+    async def test_skips_files_that_cannot_be_read(self) -> None:
+        self.folder.mkdir(parents=True)
+        good = self.folder / "good.mp4"
+        good.write_bytes(b"x")
+        os.utime(good, (RECORDED.timestamp(), RECORDED.timestamp()))
+        (self.folder / "gone.mp4").write_bytes(b"x")
+        real_stat = Path.stat
+
+        def stat(path, *args, **kwargs):
+            if path.name == "gone.mp4":
+                raise FileNotFoundError(path)
+            return real_stat(path, *args, **kwargs)
+
+        archiver = self._archiver()
+        with patch.object(Path, "stat", stat):
+            await archiver.async_start()
+            clips = await archiver.async_list("main", 10)
+
+        self.assertEqual(archiver.latest("main"), RECORDED)
+        self.assertEqual([clip.path.name for clip in clips], ["good.mp4"])
+
+    async def test_lists_by_recorded_time_not_by_name(self) -> None:
+        self.folder.mkdir(parents=True)
+        for name, recorded in (("b.mp4", RECORDED), ("a.mp4", RECORDED + timedelta(hours=1))):
+            path = self.folder / name
+            path.write_bytes(b"x")
+            os.utime(path, (recorded.timestamp(), recorded.timestamp()))
+
+        clips = await self._archiver().async_list("main", 10)
+
+        self.assertEqual([clip.path.name for clip in clips], ["a.mp4", "b.mp4"])
+
+    async def test_an_empty_device_id_uses_a_fallback_folder(self) -> None:
+        archiver = RingClipArchiver(self.hass, self.entry, self.coordinator, self.client, "!!!")
+        await archiver.async_start()
+
+        await self._ring(archiver, ring_clip_recorded_at=RECORDED.isoformat())
+
+        self.assertTrue((self.media / "bticino_go" / "companion" / "main" / f"{CLIP_NAME}.mp4").exists())
+
+    async def test_an_entrypoint_without_a_folder_name_is_skipped(self) -> None:
+        archiver = self._archiver()
+        await archiver.async_start()
+        self.coordinator.data = CompanionState(
+            revision=1,
+            entrypoints=(Entrypoint.from_dict({"id": "!!!", "capabilities": {"stream": True}, "ring_clip_recorded_at": RECORDED.isoformat()}),),
+            muted=False,
+            voicemail_enabled=None,
+            update=UpdateInfo(),
+            diagnostics=Diagnostics(),
+        )
+
+        archiver._async_state_changed()
+        await self.hass.async_settle()
+
+        self.client.async_entrypoint_clip_ring.assert_not_awaited()
+        self.assertEqual(await archiver.async_list("!!!", 10), [])
+
+    async def test_logs_a_repeated_download_failure_once(self) -> None:
+        self.client.async_entrypoint_clip_ring.side_effect = CompanionConnectionError("down")
+        archiver = self._archiver()
+        await archiver.async_start()
+
+        with self.assertLogs("bticino_companion.clip_archive", level="DEBUG") as logs:
+            for _ in range(3):
+                await self._ring(archiver, ring_clip_recorded_at=RECORDED.isoformat())
+
+        levels = [record.levelname for record in logs.records if "download the ring clip" in record.getMessage()]
+        self.assertEqual(levels, ["WARNING", "DEBUG", "DEBUG"])

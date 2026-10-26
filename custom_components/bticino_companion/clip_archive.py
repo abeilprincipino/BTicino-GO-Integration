@@ -38,6 +38,7 @@ _LOGGER = logging.getLogger(__name__)
 CLIP_SUFFIX = ".mp4"
 POSTER_SUFFIX = ".jpg"
 NAME_FORMAT = "%Y-%m-%d_%H-%M-%S"
+FALLBACK_DEVICE_FOLDER = "companion"
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,11 +60,15 @@ class RingClipArchiver:
         self._retention_days = int(entry.options.get(CONF_CLIP_RETENTION_DAYS, DEFAULT_CLIP_RETENTION_DAYS))
         media_root = hass.config.media_dirs.get("local")
         self._media_root = Path(media_root) if media_root else None
-        self._root = self._media_root / CLIP_ARCHIVE_FOLDER / slugify(device_id) if self._media_root else None
+        device_folder = slugify(device_id) or FALLBACK_DEVICE_FOLDER
+        self._root = self._media_root / CLIP_ARCHIVE_FOLDER / device_folder if self._media_root else None
         # The clip time each entrypoint was last found archived, so a state push
         # that changes nothing costs nothing.
         self._checked: dict[str, datetime] = {}
         self._in_flight: set[tuple[str, datetime]] = set()
+        # The clip time of the last failed download that was logged as a warning;
+        # retries of the same clip log at debug level.
+        self._warned: dict[str, datetime] = {}
         self._latest: dict[str, datetime] = {}
         self._unsubscribers: list[CALLBACK_TYPE] = []
         self._tasks: set[asyncio.Task] = set()
@@ -78,14 +83,21 @@ class RingClipArchiver:
         if self._root is None:
             _LOGGER.warning("No 'local' media folder is configured; doorbell ring clips are not archived")
             return
-        self._latest = await self._hass.async_add_executor_job(_scan_latest, self._root)
-        await self._async_purge()
+        try:
+            self._latest = await self._hass.async_add_executor_job(_scan_latest, self._root)
+        except OSError as err:
+            _LOGGER.warning("Unable to read the ring clip archive: %s", err)
+            self._latest = {}
+        await self._async_purge(notify=False)
         self._unsubscribers.append(self._coordinator.async_add_listener(self._async_state_changed))
         self._unsubscribers.append(
             async_track_time_interval(
                 self._hass, self._async_purge_interval, timedelta(seconds=CLIP_PURGE_INTERVAL_SECONDS)
             )
         )
+        if self._latest:
+            # Let the cameras publish the newest clip time right after a restart.
+            self._coordinator.async_update_listeners()
         self._async_state_changed()
 
     async def async_stop(self) -> None:
@@ -102,16 +114,25 @@ class RingClipArchiver:
 
     async def async_list(self, entrypoint_id: str, limit: int) -> list[ArchivedClip]:
         """The newest clips of an entrypoint, newest first."""
-        if self._root is None:
+        folder = self._folder(entrypoint_id)
+        if folder is None:
             return []
-        return await self._hass.async_add_executor_job(_list_clips, self._folder(entrypoint_id), limit)
+        try:
+            return await self._hass.async_add_executor_job(_list_clips, folder, limit)
+        except OSError as err:
+            _LOGGER.debug("Unable to list the ring clips of %s: %s", entrypoint_id, err)
+            return []
 
     def url_path(self, path: Path) -> str:
         """The path Home Assistant serves an archived file at, before signing."""
         return "/media/local/" + quote(path.relative_to(self._media_root).as_posix())
 
-    def _folder(self, entrypoint_id: str) -> Path:
-        return self._root / slugify(entrypoint_id)
+    def _folder(self, entrypoint_id: str) -> Path | None:
+        """The folder of an entrypoint, never the device folder itself."""
+        if self._root is None:
+            return None
+        name = slugify(entrypoint_id)
+        return self._root / name if name else None
 
     @callback
     def _async_state_changed(self) -> None:
@@ -120,8 +141,13 @@ class RingClipArchiver:
             return
         for entrypoint in state.entrypoints:
             recorded = entrypoint.ring_clip_recorded_at
+            if recorded is None:
+                continue
+            if self._folder(entrypoint.id) is None:
+                _LOGGER.debug("Entrypoint id %r has no usable folder name; its ring clips are not archived", entrypoint.id)
+                continue
             key = (entrypoint.id, recorded)
-            if recorded is None or self._checked.get(entrypoint.id) == recorded or key in self._in_flight:
+            if self._checked.get(entrypoint.id) == recorded or key in self._in_flight:
                 continue
             self._in_flight.add(key)
             task = self._hass.async_create_background_task(
@@ -132,15 +158,26 @@ class RingClipArchiver:
 
     async def _async_archive(self, entrypoint: Entrypoint, recorded: datetime) -> None:
         try:
-            clip_path = self._folder(entrypoint.id) / f"{dt_util.as_local(recorded).strftime(NAME_FORMAT)}{CLIP_SUFFIX}"
-            if await self._hass.async_add_executor_job(clip_path.exists):
+            folder = self._folder(entrypoint.id)
+            if folder is None:
+                return
+            clip_path = folder / f"{dt_util.as_local(recorded).strftime(NAME_FORMAT)}{CLIP_SUFFIX}"
+            try:
+                exists = await self._hass.async_add_executor_job(clip_path.exists)
+            except OSError as err:
+                _LOGGER.warning("Unable to check the ring clip archive of %s: %s", entrypoint.id, err)
+                return
+            if exists:
                 self._checked[entrypoint.id] = recorded
                 return
             try:
                 clip = await self._client.async_entrypoint_clip_ring(entrypoint.id)
             except CompanionApiError as err:
-                # Still missing, so the next state push tries again.
-                _LOGGER.warning("Unable to download the ring clip of %s: %s", entrypoint.id, err)
+                # Still missing, so the next state push tries again. Say so once
+                # per clip: a bad token would otherwise log on every push.
+                level = logging.DEBUG if self._warned.get(entrypoint.id) == recorded else logging.WARNING
+                self._warned[entrypoint.id] = recorded
+                _LOGGER.log(level, "Unable to download the ring clip of %s: %s", entrypoint.id, err)
                 return
             if not clip:
                 return
@@ -154,9 +191,10 @@ class RingClipArchiver:
                 _LOGGER.warning("Unable to archive the ring clip of %s: %s", entrypoint.id, err)
                 return
             self._checked[entrypoint.id] = recorded
-            folder = slugify(entrypoint.id)
-            if recorded > self._latest.get(folder, datetime.min.replace(tzinfo=timezone.utc)):
-                self._latest[folder] = recorded
+            self._warned.pop(entrypoint.id, None)
+            name = folder.name
+            if recorded > self._latest.get(name, datetime.min.replace(tzinfo=timezone.utc)):
+                self._latest[name] = recorded
             self._hass.bus.async_fire(
                 EVENT_RING_CLIP_SAVED,
                 {
@@ -185,11 +223,21 @@ class RingClipArchiver:
             _LOGGER.debug("No poster for the ring clip of %s: %s", entrypoint.id, err)
             return None
 
-    async def _async_purge(self) -> None:
+    async def _async_purge(self, notify: bool = True) -> None:
+        """Delete expired files, then refresh the newest clip times."""
         if self._root is None or self._retention_days <= 0:
             return
         cutoff = dt_util.utcnow() - timedelta(days=self._retention_days)
-        await self._hass.async_add_executor_job(_purge, self._root, cutoff.timestamp())
+        try:
+            await self._hass.async_add_executor_job(_purge, self._root, cutoff.timestamp())
+            latest = await self._hass.async_add_executor_job(_scan_latest, self._root)
+        except OSError as err:
+            _LOGGER.warning("Unable to purge the ring clip archive: %s", err)
+            return
+        if latest != self._latest:
+            self._latest = latest
+            if notify:
+                self._coordinator.async_update_listeners()
 
     async def _async_purge_interval(self, _now: datetime) -> None:
         await self._async_purge()
@@ -209,49 +257,68 @@ def _write_atomic(path: Path, data: bytes, recorded: datetime) -> None:
     os.utime(path, (recorded.timestamp(), recorded.timestamp()))
 
 
-def _clips_in(folder: Path) -> list[Path]:
-    if not folder.is_dir():
+def _entries(folder: Path) -> list[Path]:
+    """The entries of a folder, or none when it is missing or unreadable."""
+    try:
+        return list(folder.iterdir())
+    except OSError:
         return []
-    return [path for path in folder.iterdir() if path.suffix == CLIP_SUFFIX and not path.name.startswith(".")]
+
+
+def _mtime(path: Path) -> float | None:
+    """The modification time of a file, or None when it vanished or cannot be read."""
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def _clips_in(folder: Path) -> list[tuple[float, Path]]:
+    """The clips of a folder with their modification time, skipping unreadable ones."""
+    clips = []
+    for path in _entries(folder):
+        if path.suffix != CLIP_SUFFIX or path.name.startswith("."):
+            continue
+        modified = _mtime(path)
+        if modified is not None:
+            clips.append((modified, path))
+    return clips
 
 
 def _scan_latest(root: Path) -> dict[str, datetime]:
     latest: dict[str, datetime] = {}
-    if not root.is_dir():
-        return latest
-    for folder in root.iterdir():
+    for folder in _entries(root):
         clips = _clips_in(folder)
         if clips:
-            newest = max(path.stat().st_mtime for path in clips)
-            latest[folder.name] = datetime.fromtimestamp(newest, timezone.utc)
+            latest[folder.name] = datetime.fromtimestamp(max(modified for modified, _ in clips), timezone.utc)
     return latest
 
 
 def _list_clips(folder: Path, limit: int) -> list[ArchivedClip]:
-    clips = sorted(_clips_in(folder), key=lambda path: path.name, reverse=True)[:limit]
+    # Newest first by recorded time (the modification time); the name only breaks ties.
+    clips = sorted(_clips_in(folder), key=lambda item: (item[0], item[1].name), reverse=True)[:limit]
     result = []
-    for path in clips:
+    for modified, path in clips:
         poster = path.with_suffix(POSTER_SUFFIX)
         result.append(
             ArchivedClip(
-                recorded_at=datetime.fromtimestamp(path.stat().st_mtime, timezone.utc),
+                recorded_at=datetime.fromtimestamp(modified, timezone.utc),
                 path=path,
-                poster=poster if poster.exists() else None,
+                poster=poster if _mtime(poster) is not None else None,
             )
         )
     return result
 
 
 def _purge(root: Path, cutoff: float) -> None:
-    if not root.is_dir():
-        return
-    for folder in root.iterdir():
-        if not folder.is_dir():
-            continue
-        for path in folder.iterdir():
-            if path.suffix in (CLIP_SUFFIX, POSTER_SUFFIX) and path.stat().st_mtime < cutoff:
+    for folder in _entries(root):
+        for path in _entries(folder):
+            if path.suffix not in (CLIP_SUFFIX, POSTER_SUFFIX):
+                continue
+            modified = _mtime(path)
+            if modified is not None and modified < cutoff:
                 with contextlib.suppress(OSError):
                     path.unlink()
         with contextlib.suppress(OSError):
-            if not any(folder.iterdir()):
+            if folder.is_dir() and not any(folder.iterdir()):
                 folder.rmdir()
