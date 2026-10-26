@@ -12,7 +12,7 @@ from urllib.parse import unquote, urlsplit, urlunsplit
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import AbortFlow
@@ -24,6 +24,7 @@ from .const import (
     CONF_ACCEPT_NEW_HOST_KEY,
     CONF_ACCESS_TOKEN,
     CONF_CLAIM_CODE,
+    CONF_CLIP_RETENTION_DAYS,
     CONF_COMPANION_URL,
     CONF_DEVICE_ID,
     CONF_INSTANCE_ID,
@@ -33,10 +34,12 @@ from .const import (
     CONF_SSH_HOST_KEY,
     CONF_SSH_USERNAME,
     DATA_PENDING_REAUTH_URLS,
+    DEFAULT_CLIP_RETENTION_DAYS,
     DEFAULT_OWNER_CREDENTIAL,
     DEFAULT_PORT,
     DEFAULT_SSH_USERNAME,
     DOMAIN,
+    MAX_CLIP_RETENTION_DAYS,
     MAX_OWNER_PASSWORD_BYTES,
     MIN_OWNER_PASSWORD_LENGTH,
 )
@@ -65,6 +68,13 @@ class CompanionConfigFlow(ConfigFlow, domain=DOMAIN):
     """Configure a Companion using its physical device ID and installation ID."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        """Options of an installed Companion: how long ring clips are kept."""
+        del config_entry
+        return CompanionOptionsFlow()
 
     def __init__(self) -> None:
         self._device_id = ""
@@ -624,3 +634,24 @@ def _txt(properties: Mapping[Any, Any], key: str) -> str:
     if isinstance(value, bytes):
         return value.decode(errors="ignore").strip()
     return str(value).strip() if value is not None else ""
+
+
+def options_schema(current: int) -> vol.Schema:
+    """The options form: ring clip retention in days, 0 to keep them forever."""
+    return vol.Schema(
+        {
+            vol.Required(CONF_CLIP_RETENTION_DAYS, default=current): vol.All(
+                vol.Coerce(int), vol.Range(min=0, max=MAX_CLIP_RETENTION_DAYS)
+            )
+        }
+    )
+
+
+class CompanionOptionsFlow(OptionsFlow):
+    """Edit how long Home Assistant keeps the doorbell ring clips."""
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+        current = int(self.config_entry.options.get(CONF_CLIP_RETENTION_DAYS, DEFAULT_CLIP_RETENTION_DAYS))
+        return self.async_show_form(step_id="init", data_schema=options_schema(current))

@@ -58,6 +58,7 @@ class Entrypoint:
     availability: Availability
     snapshot_updated_at: datetime | None = None
     ring_snapshot_updated_at: datetime | None = None
+    ring_clip_recorded_at: datetime | None = None
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "Entrypoint":
@@ -69,6 +70,7 @@ class Entrypoint:
             availability=Availability.from_dict(mapping_at(payload, "availability")),
             snapshot_updated_at=_optional_datetime(payload.get("snapshot_updated_at")),
             ring_snapshot_updated_at=_optional_datetime(payload.get("ring_snapshot_updated_at")),
+            ring_clip_recorded_at=_optional_datetime(payload.get("ring_clip_recorded_at")),
         )
 
 

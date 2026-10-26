@@ -1,3 +1,56 @@
+// Shared by the whole card. Scoped selectors: the carousel and the clip player
+// have buttons and images of their own.
+const CARD_STYLES = `
+  :host { display: block; } ha-card { overflow: hidden; }
+  .title-bar { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 0; }
+  .title { font-size: 16px; font-weight: 600; } .subtitle { color: var(--secondary-text-color); font-size: 12px; margin-top: 2px; }
+  .status { align-items: center; color: var(--secondary-text-color); display: flex; font-size: 12px; gap: 6px; }
+  .dot { border-radius: 50%; height: 8px; width: 8px; } .dot-idle { background: rgba(127,127,127,.4); } .dot-active { background: #2e7d32; }
+  .dot-ringing, .dot-connecting { animation: pulse 1.2s ease-in-out infinite; } .dot-ringing { background: #f9a825; } .dot-connecting { background: #90caf9; }
+  @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .5; transform: scale(1.3); } }
+  .viewer { position: relative; background: #111; aspect-ratio: 4 / 3; display: grid; place-items: center; }
+  .live { display: grid; inset: 0; place-items: center; position: absolute; }
+  .playback { background: #111; display: grid; inset: 0; place-items: center; position: absolute; z-index: 1; }
+  .live img, .live video { width: 100%; height: 100%; object-fit: cover; } .placeholder { color: #aaa; } .hidden { display: none !important; }
+  .ring-overlay { align-items: center; background: rgba(0,0,0,.55); color: #fff; display: flex; flex-direction: column; gap: 8px; inset: 0; justify-content: center; position: absolute; }
+  .ring-pulse { animation: pulse 1.2s ease-in-out infinite; background: #f9a825; border-radius: 50%; height: 20px; width: 20px; } .ring-label { font-size: 16px; font-weight: 600; }
+  .controls { display: flex; justify-content: center; gap: 16px; padding: 14px; } .controls button { align-items: center; border: 0; border-radius: 50%; color: #fff; cursor: pointer; display: flex; height: 52px; justify-content: center; width: 52px; } .controls button:disabled { cursor: not-allowed; opacity: .4; } .controls button ha-icon { --mdc-icon-size: 26px; }
+  .call { background: #2e7d32; } .end { background: #c62828; } .mute { background: #546e7a; } .unlock { background: #6d6d6d; } .error { color: var(--error-color); padding: 0 14px 12px; font-size: 13px; }
+  .playback video { background: #111; height: 100%; object-fit: contain; width: 100%; }
+  .playback-bar { align-items: center; background: linear-gradient(rgba(0,0,0,.6), transparent); color: #fff; display: flex; font-size: 13px; font-weight: 500; justify-content: space-between; left: 0; padding: 8px 8px 22px 14px; pointer-events: none; position: absolute; right: 0; top: 0; }
+  .round { align-items: center; background: rgba(0,0,0,.5); border: 0; border-radius: 50%; color: #fff; cursor: pointer; display: flex; justify-content: center; pointer-events: auto; }
+  .round:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
+  .playback-close { height: 36px; width: 36px; } .playback-close ha-icon { --mdc-icon-size: 20px; }
+  .replay { height: 56px; position: absolute; width: 56px; } .replay ha-icon { --mdc-icon-size: 30px; }
+  .playback-error { align-items: center; color: #ddd; display: flex; flex-direction: column; font-size: 14px; gap: 8px; position: absolute; } .playback-error ha-icon { --mdc-icon-size: 32px; }
+  .clips { border-top: 1px solid var(--divider-color); padding: 4px 14px 14px; }
+  .clips-header { align-items: baseline; color: var(--secondary-text-color); display: flex; font-size: 13px; font-weight: 600; justify-content: space-between; padding-top: 10px; }
+  .clips-header .count { font-size: 12px; font-weight: 400; }
+  .strip { display: flex; gap: 10px; overflow-x: auto; margin: 0 -4px; padding: 8px 4px 2px; scroll-behavior: smooth; scroll-padding: 0 4px; scroll-snap-type: x mandatory; scrollbar-width: none; }
+  .strip::-webkit-scrollbar { display: none; }
+  .strip.fade { -webkit-mask-image: linear-gradient(to right, #000 85%, transparent); mask-image: linear-gradient(to right, #000 85%, transparent); }
+  .clip-item { flex: 0 0 auto; scroll-snap-align: start; }
+  .clip { background: none; border: 0; color: inherit; cursor: pointer; display: flex; flex-direction: column; font: inherit; gap: 6px; padding: 0; text-align: center; width: 112px; }
+  .thumb { aspect-ratio: 4 / 3; background: var(--secondary-background-color); border-radius: calc(var(--ha-card-border-radius, 12px) * .75); box-shadow: 0 1px 2px rgba(0,0,0,.15); display: grid; overflow: hidden; place-items: center; position: relative; transition: transform 150ms ease, box-shadow 150ms ease; width: 100%; }
+  .thumb img { grid-area: 1 / 1; height: 100%; object-fit: cover; width: 100%; }
+  .no-poster { --mdc-icon-size: 28px; color: var(--secondary-text-color); grid-area: 1 / 1; }
+  .badge { -webkit-backdrop-filter: blur(4px); align-items: center; backdrop-filter: blur(4px); background: rgba(0,0,0,.45); border-radius: 50%; color: #fff; display: flex; grid-area: 1 / 1; height: 30px; justify-content: center; width: 30px; }
+  .badge ha-icon { --mdc-icon-size: 18px; }
+  @media (hover: hover) { .clip:hover .thumb { box-shadow: 0 4px 10px rgba(0,0,0,.25); transform: translateY(-2px); } }
+  .clip:focus-visible { outline: none; }
+  .clip:focus-visible .thumb, .clip.playing .thumb { outline: 2px solid var(--primary-color); outline-offset: 2px; }
+  .label { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
+  .label .day, .label .time { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .label .day { color: var(--primary-text-color); font-size: 12px; font-weight: 500; }
+  .label .time { color: var(--secondary-text-color); font-size: 11px; }
+  .skeleton { width: 112px; }
+  .skeleton .thumb, .skeleton .label span { animation: shimmer 1.2s linear infinite; background: linear-gradient(90deg, var(--secondary-background-color) 25%, var(--divider-color) 50%, var(--secondary-background-color) 75%); background-size: 200% 100%; box-shadow: none; }
+  .skeleton .label span { border-radius: 4px; display: block; margin: 2px auto 0; width: 70%; }
+  @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+  @media (max-width: 399px) { .clip, .skeleton { width: 96px; } }
+  @media (prefers-reduced-motion: reduce) { .skeleton .thumb, .skeleton .label span { animation: none; } .thumb { transition: none; } .clip:hover .thumb { transform: none; } .strip { scroll-behavior: auto; } }
+`;
+
 class BTicinoGoIntercomCard extends HTMLElement {
   constructor() {
     super();
@@ -34,16 +87,41 @@ class BTicinoGoIntercomCard extends HTMLElement {
     // True after this card closed its view because another device answered;
     // cleared when that call ends.
     this._leftForElsewhere = false;
+    this._skeleton = false;
+    // Ring clips: the list from bticino_companion/card_ring_clips and the clip
+    // playing in the viewer. See docs/superpowers/specs/2026-10-26-ring-clip-design.md
+    // in the Companion repository.
+    this._clips = [];
+    this._clipsLoadedAt = 0;
+    // The bticino_last_ring_clip_at the list was loaded for.
+    this._clipsKey = undefined;
+    this._clipsLoading = false;
+    this._clipsLoaded = false;
+    this._clipsPromise = undefined;
+    this._clipsReload = false;
+    // recorded_at of the clip in the player, undefined when none plays.
+    this._playing = undefined;
+    // The player's video failed: keep "Clip unavailable" up until the user closes it.
+    this._playbackFailed = false;
+    this._onKeydown = (event) => {
+      if (event.key === "Escape" && !event.defaultPrevented && this._playing) this._closePlayback();
+    };
   }
 
   setConfig(config) {
     if (!config.camera) throw new Error("camera entity is required");
-    this._config = config;
+    const clips = config.clips ?? 10;
+    if (!Number.isInteger(clips) || clips < 0 || clips > 50) throw new Error("clips must be an integer from 0 to 50");
+    this._config = { ...config, clips };
+    this._clipsKey = undefined;
     this._render();
   }
 
   set hass(hass) {
     this._hass = hass;
+    this._syncClips();
+    // The doorbell comes first: a ring or a call closes the clip player.
+    if (this._playing && (this._isRinging() || this._callState() === "active")) this._closePlayback();
     this._endPreviewIfRingOver();
     if (this._leftForElsewhere && this._callState() !== "active") this._leftForElsewhere = false;
     if (this._pc || this._connecting) {
@@ -100,12 +178,17 @@ class BTicinoGoIntercomCard extends HTMLElement {
     }
   }
 
+  connectedCallback() {
+    window.addEventListener("keydown", this._onKeydown);
+  }
+
   disconnectedCallback() {
+    window.removeEventListener("keydown", this._onKeydown);
     this._cleanup();
   }
 
   getCardSize() {
-    return 5;
+    return this._config.clips ? 7 : 5;
   }
 
   _cameraState() {
@@ -136,6 +219,177 @@ class BTicinoGoIntercomCard extends HTMLElement {
 
   _answeredElsewhere() {
     return this._cameraState()?.attributes?.bticino_answered_elsewhere === true;
+  }
+
+  _syncClips() {
+    if (!this._config.clips) {
+      if (this._clips.length || this._playing) {
+        this._clips = [];
+        this._closePlayback();
+      }
+      this._renderClips();
+      return;
+    }
+    const key = this._cameraState()?.attributes?.bticino_last_ring_clip_at || "";
+    if (key === this._clipsKey) return;
+    this._clipsKey = key;
+    this._loadClips().catch(() => {});
+  }
+
+  // One request at a time; a reload asked meanwhile runs once the current one ends.
+  _loadClips() {
+    if (this._clipsPromise) {
+      this._clipsReload = true;
+      return this._clipsPromise;
+    }
+    this._clipsPromise = this._fetchClips().finally(() => { this._clipsPromise = undefined; });
+    return this._clipsPromise;
+  }
+
+  async _fetchClips() {
+    this._clipsLoading = true;
+    // Skeletons only on the first load: a reload keeps the strip as it is.
+    if (!this._clipsLoaded) this._renderClips();
+    try {
+      do {
+        this._clipsReload = false;
+        const response = await this._send("bticino_companion/card_ring_clips", { limit: this._config.clips });
+        this._clips = Array.isArray(response?.clips) ? response.clips : [];
+        this._clipsLoadedAt = Date.now();
+      } while (this._clipsReload);
+    } catch (err) {
+      // Clip errors never mix with call errors: the carousel just hides.
+      this._clips = [];
+      console.debug("bticino-go-intercom-card: ring clips unavailable", err);
+    } finally {
+      this._clipsLoading = false;
+      this._clipsLoaded = true;
+    }
+    if (this._playing && !this._playbackFailed && !this._clips.some((clip) => clip.recorded_at === this._playing)) this._closePlayback();
+    this._renderClips();
+  }
+
+  _renderClips() {
+    const section = this.shadowRoot?.querySelector(".clips");
+    if (!section) return;
+    const loading = this._clipsLoading && !this._clipsLoaded;
+    const visible = this._config.clips > 0 && (loading || this._clips.length > 0);
+    section.classList.toggle("hidden", !visible);
+    if (!visible) {
+      section.innerHTML = "";
+      return;
+    }
+    const scroll = section.querySelector(".strip")?.scrollLeft || 0;
+    const focused = this.shadowRoot.activeElement;
+    const focusedKey = focused && section.contains(focused) && focused.classList.contains("clip") ? focused.dataset.recordedAt : undefined;
+    const items = loading
+      ? Array.from({ length: 3 }, () => `<div class="clip-item skeleton" role="listitem" aria-hidden="true"><div class="thumb"></div><div class="label"><span class="day">&nbsp;</span><span class="time">&nbsp;</span></div></div>`).join("")
+      : this._clips.map((clip) => {
+        const { day, time } = this._clipLabel(clip.recorded_at);
+        const playing = clip.recorded_at === this._playing;
+        const poster = clip.poster_url
+          ? `<img src="${this._escape(this._hass.hassUrl(clip.poster_url))}" alt="" loading="lazy" />`
+          : `<ha-icon class="no-poster" icon="mdi:video"></ha-icon>`;
+        return `<div class="clip-item" role="listitem"><button class="clip ${playing ? "playing" : ""}" data-recorded-at="${this._escape(clip.recorded_at)}" aria-label="Play ring clip, ${this._escape(day)} ${this._escape(time)}" aria-current="${playing}"><span class="thumb">${poster}<span class="badge"><ha-icon icon="${playing ? "mdi:equalizer" : "mdi:play"}"></ha-icon></span></span><span class="label"><span class="day">${this._escape(playing ? "Playing" : day)}</span><span class="time">${this._escape(time)}</span></span></button></div>`;
+      }).join("");
+    section.innerHTML = `<div class="clips-header"><span>Recent rings</span><span class="count">${loading ? "" : this._clips.length}</span></div><div class="strip" role="list">${items}</div>`;
+    const strip = section.querySelector(".strip");
+    strip.scrollTo({ left: scroll, behavior: "instant" });
+    strip.addEventListener("scroll", () => this._updateFade(strip), { passive: true });
+    strip.querySelectorAll("button.clip").forEach((button) => {
+      button.addEventListener("click", () => this._play(button.dataset.recordedAt));
+    });
+    this._updateFade(strip);
+    if (focusedKey !== undefined) {
+      Array.from(strip.querySelectorAll("button.clip")).find((button) => button.dataset.recordedAt === focusedKey)?.focus({ preventScroll: true });
+    }
+  }
+
+  // The right edge fades while more clips are off screen.
+  _updateFade(strip) {
+    strip.classList.toggle("fade", strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 4);
+  }
+
+  // "Today 14:32", "Yesterday 09:10", "12 Oct 18:05", in the user's language
+  // and 12/24-hour setting, without translation strings.
+  _clipLabel(iso) {
+    const date = new Date(iso);
+    const language = this._hass?.locale?.language || navigator.language;
+    const startOfDay = (value) => new Date(value.getFullYear(), value.getMonth(), value.getDate());
+    const days = Math.round((startOfDay(date) - startOfDay(new Date())) / 86400000);
+    let day;
+    if (days === 0 || days === -1) {
+      const relative = new Intl.RelativeTimeFormat(language, { numeric: "auto" }).format(days, "day");
+      day = relative.charAt(0).toLocaleUpperCase(language) + relative.slice(1);
+    } else {
+      day = date.toLocaleDateString(language, { day: "numeric", month: "short" });
+    }
+    const format = this._hass?.locale?.time_format;
+    const hour12 = format === "12" ? { hour12: true } : format === "24" ? { hourCycle: "h23" } : {};
+    const time = date.toLocaleTimeString(language, { hour: "2-digit", minute: "2-digit", ...hour12 });
+    return { day, time };
+  }
+
+  async _play(recordedAt) {
+    // The doorbell comes first: no clip while it rings or a call is up.
+    if (this._isRinging() || this._pc || this._connecting || this._callState() === "active") return;
+    // Signed URLs last an hour: reload a list older than 50 minutes first.
+    if (Date.now() - this._clipsLoadedAt > 50 * 60 * 1000) {
+      await this._loadClips();
+      // A ring, live view or answer may have started during the reload.
+      if (this._isRinging() || this._pc || this._connecting || this._callState() === "active") return;
+    }
+    const clip = this._clips.find((item) => item.recorded_at === recordedAt);
+    if (!clip) return;
+    this._playing = recordedAt;
+    this._playbackFailed = false;
+    this._renderPlayback(clip);
+    this._renderClips();
+  }
+
+  _renderPlayback(clip) {
+    const layer = this.shadowRoot?.querySelector(".playback");
+    if (!layer) return;
+    if (!this._playing || !clip) {
+      layer.classList.add("hidden");
+      layer.innerHTML = "";
+      return;
+    }
+    const { day, time } = this._clipLabel(clip.recorded_at);
+    const poster = clip.poster_url ? ` poster="${this._escape(this._hass.hassUrl(clip.poster_url))}"` : "";
+    // Muted for autoplay: the clip has no audio anyway.
+    layer.innerHTML = `
+      <video controls autoplay playsinline muted preload="auto"${poster} src="${this._escape(this._hass.hassUrl(clip.url))}"></video>
+      <div class="playback-bar"><span>${this._escape(day)} · ${this._escape(time)}</span><button class="round playback-close" title="Close" aria-label="Close clip"><ha-icon icon="mdi:close"></ha-icon></button></div>
+      <button class="round replay hidden" title="Replay" aria-label="Replay clip"><ha-icon icon="mdi:replay"></ha-icon></button>
+      <div class="playback-error hidden"><ha-icon icon="mdi:video-off"></ha-icon><span>Clip unavailable</span></div>`;
+    layer.classList.remove("hidden");
+    const video = layer.querySelector("video");
+    const replay = layer.querySelector(".replay");
+    video.addEventListener("ended", () => replay.classList.remove("hidden"));
+    video.addEventListener("play", () => replay.classList.add("hidden"));
+    video.addEventListener("error", () => {
+      // An error from a video that was replaced must not fail the new player.
+      if (layer.querySelector("video") !== video) return;
+      // A file purged meanwhile, or an expired URL: say so and refresh the list.
+      video.classList.add("hidden");
+      layer.querySelector(".playback-error").classList.remove("hidden");
+      this._playbackFailed = true;
+      this._loadClips().catch(() => {});
+    });
+    replay.addEventListener("click", () => {
+      video.currentTime = 0;
+      video.play().catch(() => {});
+    });
+    layer.querySelector(".playback-close").addEventListener("click", () => this._closePlayback());
+  }
+
+  _closePlayback() {
+    if (!this._playing) return;
+    this._playing = undefined;
+    this._playbackFailed = false;
+    this._renderPlayback();
+    this._renderClips();
   }
 
   _send(type, payload) {
@@ -195,6 +449,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
   // session while the call rings: no microphone is asked for until the answer.
   async _start(beforeOffer, { preview = false } = {}) {
     if (this._pc || this._connecting) return;
+    this._closePlayback();
     this._connecting = true;
     this._preview = preview;
     this._error = "";
@@ -308,7 +563,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
   }
 
   _attachVideo() {
-    const video = this.shadowRoot?.querySelector("video");
+    const video = this.shadowRoot?.querySelector(".live video");
     if (video && this._remoteStream && video.srcObject !== this._remoteStream) {
       video.srcObject = this._remoteStream;
       // A ringing preview starts without a user gesture, and the autoplay policy
@@ -472,6 +727,16 @@ class BTicinoGoIntercomCard extends HTMLElement {
     }[character]));
   }
 
+  // The parts _render() rewrites on every hass update live in their own
+  // containers; the clip player and the carousel do not, so a playing clip or a
+  // scrolled strip survives. See docs/superpowers/specs/2026-10-26-ring-clip-design.md
+  // in the Companion repository.
+  _ensureSkeleton() {
+    if (this._skeleton || !this.shadowRoot) return;
+    this.shadowRoot.innerHTML = `<style>${CARD_STYLES}</style><ha-card><div class="top"></div><div class="viewer"><div class="live"></div><div class="playback hidden"></div></div><div class="bottom"></div><section class="clips hidden"></section></ha-card>`;
+    this._skeleton = true;
+  }
+
   _render() {
     if (!this.shadowRoot) return;
     const name = this._config.name || this._cameraState()?.attributes?.friendly_name || this._config.camera || "Intercom";
@@ -509,32 +774,20 @@ class BTicinoGoIntercomCard extends HTMLElement {
           : remoteActive
             ? [callState === "preview" ? "Preview" : "Active", "active"]
             : ["Idle", "idle"];
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host { display: block; } ha-card { overflow: hidden; }
-        .title-bar { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 0; }
-        .title { font-size: 16px; font-weight: 600; } .subtitle { color: var(--secondary-text-color); font-size: 12px; margin-top: 2px; }
-        .status { align-items: center; color: var(--secondary-text-color); display: flex; font-size: 12px; gap: 6px; }
-        .dot { border-radius: 50%; height: 8px; width: 8px; } .dot-idle { background: rgba(127,127,127,.4); } .dot-active { background: #2e7d32; }
-        .dot-ringing, .dot-connecting { animation: pulse 1.2s ease-in-out infinite; } .dot-ringing { background: #f9a825; } .dot-connecting { background: #90caf9; }
-        @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .5; transform: scale(1.3); } }
-        .viewer { position: relative; background: #111; aspect-ratio: 4 / 3; display: grid; place-items: center; } img, video { width: 100%; height: 100%; object-fit: cover; } .placeholder { color: #aaa; } .hidden { display: none !important; }
-        .ring-overlay { align-items: center; background: rgba(0,0,0,.55); color: #fff; display: flex; flex-direction: column; gap: 8px; inset: 0; justify-content: center; position: absolute; }
-        .ring-pulse { animation: pulse 1.2s ease-in-out infinite; background: #f9a825; border-radius: 50%; height: 20px; width: 20px; } .ring-label { font-size: 16px; font-weight: 600; }
-        .controls { display: flex; justify-content: center; gap: 16px; padding: 14px; } button { align-items: center; border: 0; border-radius: 50%; color: #fff; cursor: pointer; display: flex; height: 52px; justify-content: center; width: 52px; } button:disabled { cursor: not-allowed; opacity: .4; } button ha-icon { --mdc-icon-size: 26px; }
-        .call { background: #2e7d32; } .end { background: #c62828; } .mute { background: #546e7a; } .unlock { background: #6d6d6d; } .error { color: var(--error-color); padding: 0 14px 12px; font-size: 13px; }
-      </style>
-      <ha-card><div class="title-bar"><div><div class="title">${this._escape(name)}</div><div class="subtitle">${this._escape(entrypoint)}</div></div><div class="status"><span class="dot dot-${status[1]}"></span>${status[0]}</div></div><div class="viewer">
+    this._ensureSkeleton();
+    const root = this.shadowRoot;
+    root.querySelector(".top").innerHTML = `<div class="title-bar"><div><div class="title">${this._escape(name)}</div><div class="subtitle">${this._escape(entrypoint)}</div></div><div class="status"><span class="dot dot-${status[1]}"></span>${status[0]}</div></div>`;
+    root.querySelector(".live").innerHTML = `
         <img class="${active || !snapshot ? "hidden" : ""}" src="${this._escape(snapshot)}" alt="${this._escape(name)}" />
         <div class="placeholder ${active || snapshot ? "hidden" : ""}">No snapshot available</div>
         <video class="${this._connected ? "" : "hidden"}" playsinline autoplay></video>
-        <div class="ring-overlay ${ringing && !active ? "" : "hidden"}"><div class="ring-pulse"></div><div class="ring-label">${this._escape(entrypoint)}</div><div>Incoming call</div></div>
-      </div><div class="controls">
+        <div class="ring-overlay ${ringing && !active ? "" : "hidden"}"><div class="ring-pulse"></div><div class="ring-label">${this._escape(entrypoint)}</div><div>Incoming call</div></div>`;
+    root.querySelector(".bottom").innerHTML = `<div class="controls">
         <button class="call ${(active && !this._preview) || (ringing && !canAnswer) || (this._leftForElsewhere && inCall) ? "hidden" : ""}" title="${canAnswer ? "Answer" : "Start live view"}"><ha-icon icon="mdi:phone"></ha-icon></button>
         <button class="end ${canEnd ? "" : "hidden"}" title="${inCall ? "Hang up" : "End live view"}"><ha-icon icon="mdi:phone-hangup"></ha-icon></button>
         <button class="mute ${this._connected && this._micTrack ? "" : "hidden"}" title="${this._muted ? "Unmute" : "Mute"}"><ha-icon icon="${this._muted ? "mdi:microphone-off" : "mdi:microphone"}"></ha-icon></button>
         <button class="unlock" title="Unlock"><ha-icon icon="mdi:lock-open"></ha-icon></button>
-       </div><div class="error ${this._error ? "" : "hidden"}">${this._escape(this._error)}</div></ha-card>`;
+       </div><div class="error ${this._error ? "" : "hidden"}">${this._escape(this._error)}</div>`;
     this.shadowRoot.querySelector(".call")?.addEventListener("click", () => (canAnswer ? this._answer() : this._start()));
     this.shadowRoot.querySelector(".end")?.addEventListener("click", () => (inCall ? this._hangup() : this._end()));
     this.shadowRoot.querySelector(".mute")?.addEventListener("click", () => this._toggleMute());

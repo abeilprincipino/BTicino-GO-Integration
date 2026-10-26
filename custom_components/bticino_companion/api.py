@@ -19,6 +19,7 @@ from .const import (
     API_PATH_CALL_ANSWER,
     API_PATH_CALL_HANGUP,
     API_PATH_AUTH_STATUS,
+    API_PATH_CLIP_RING,
     API_PATH_ENTRYPOINT_UNLOCK,
     API_PATH_SYSTEM_REBOOT,
     API_PATH_SYSTEM_SERVICE_RESTART,
@@ -279,13 +280,17 @@ class CompanionApiClient:
         """Return the picture taken at the last doorbell ring, if any."""
         return await self._async_snapshot(API_PATH_SNAPSHOT_RING, entrypoint_id)
 
-    async def _async_snapshot(self, path: str, entrypoint_id: str) -> bytes | None:
+    async def async_entrypoint_clip_ring(self, entrypoint_id: str) -> bytes | None:
+        """Return the video recorded at the last doorbell ring, if any."""
+        return await self._async_snapshot(API_PATH_CLIP_RING, entrypoint_id, accept="video/mp4")
+
+    async def _async_snapshot(self, path: str, entrypoint_id: str, *, accept: str = "image/jpeg") -> bytes | None:
         if not self._access_token:
             raise CompanionAuthError("an access token is required")
         try:
             async with self._session.get(
                 f"{self._base_url}{path.format(entrypoint_id=quote(entrypoint_id, safe=''))}",
-                headers={"Accept": "image/jpeg", "Authorization": f"Bearer {self._access_token}"},
+                headers={"Accept": accept, "Authorization": f"Bearer {self._access_token}"},
             ) as response:
                 if response.status == 404:
                     return None

@@ -86,6 +86,20 @@
       "reconfigure_successful": "The Companion was reinstalled."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Ring clips",
+        "description": "The Companion records the first 15 seconds of video of every doorbell ring. Home Assistant stores the clips in Media › My media › bticino_go.",
+        "data": {
+          "clip_retention_days": "Ring clip retention (days)"
+        },
+        "data_description": {
+          "clip_retention_days": "Clips older than this are deleted once a day. 0 keeps them forever."
+        }
+      }
+    }
+  },
   "entity": {
     "event": {
       "openwebnet_trace": {

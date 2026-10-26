@@ -22,6 +22,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, _handle_unlock)
     websocket_api.async_register_command(hass, _handle_call_answer)
     websocket_api.async_register_command(hass, _handle_call_hangup)
+    websocket_api.async_register_command(hass, _handle_ring_clips)
 
 
 def _camera_for_message(hass: HomeAssistant, msg: dict[str, Any]):
@@ -150,3 +151,24 @@ async def _handle_call_hangup(hass: HomeAssistant, connection, msg: dict[str, An
         connection.send_error(msg["id"], "call_hangup_failed", str(err))
         return
     connection.send_result(msg["id"])
+
+
+@callback
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "bticino_companion/card_ring_clips",
+        vol.Required("camera_entity_id"): str,
+        vol.Optional("limit", default=10): vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
+    }
+)
+@websocket_api.async_response
+async def _handle_ring_clips(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """List the card camera's latest ring clips with signed URLs."""
+    try:
+        clips = await _camera_for_message(hass, msg).async_handle_card_ring_clips(
+            int(msg["limit"]), connection.refresh_token_id
+        )
+    except (CompanionApiError, HomeAssistantError, ValueError) as err:
+        connection.send_error(msg["id"], "ring_clips_failed", str(err))
+        return
+    connection.send_result(msg["id"], {"clips": clips})

@@ -18,6 +18,7 @@ try:
     from homeassistant.const import EntityCategory
     from bticino_companion.button import CompanionEntrypointButton, CompanionRebootButton, CompanionServiceRestartButton
     from bticino_companion.camera import CompanionEntrypointCamera
+    from bticino_companion.clip_archive import ArchivedClip
     from bticino_companion.api import CompanionApiClient, CompanionApiError
     from bticino_companion.coordinator import CompanionCoordinator
     from bticino_companion.dynamic_entities import DynamicEntityManager
@@ -390,6 +391,56 @@ class RingSnapshotImageTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(await image.async_image())
         entry.runtime_data.client.async_entrypoint_snapshot_ring.assert_not_awaited()
+
+
+class CameraRingClipAttributeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_exposes_the_last_archived_clip(self) -> None:
+        entry = _MockEntry()
+        recorded = datetime(2026, 10, 26, 9, 30, tzinfo=timezone.utc)
+        entry.runtime_data.clip_archive = MagicMock()
+        entry.runtime_data.clip_archive.latest = MagicMock(return_value=recorded)
+        stream = Entrypoint.from_dict({"id": "main", "capabilities": {"stream": True}})
+        camera = CompanionEntrypointCamera(entry, _coordinator(_state(entrypoints=(stream,))), entry.runtime_data.client, "main", "Main")
+
+        self.assertEqual(camera.extra_state_attributes["bticino_last_ring_clip_at"], recorded.isoformat())
+
+    async def test_no_attribute_before_the_first_clip(self) -> None:
+        entry = _MockEntry()
+        entry.runtime_data.clip_archive = MagicMock()
+        entry.runtime_data.clip_archive.latest = MagicMock(return_value=None)
+        stream = Entrypoint.from_dict({"id": "main", "capabilities": {"stream": True}})
+        camera = CompanionEntrypointCamera(entry, _coordinator(_state(entrypoints=(stream,))), entry.runtime_data.client, "main", "Main")
+
+        self.assertNotIn("bticino_last_ring_clip_at", camera.extra_state_attributes)
+
+    async def test_lists_clips_with_signed_urls(self) -> None:
+        entry = _MockEntry()
+        recorded = datetime(2026, 10, 26, 9, 30, tzinfo=timezone.utc)
+        clip = Path("/media/bticino_go/device-1/main/2026-10-26_09-30-00.mp4")
+        archive = MagicMock()
+        archive.async_list = AsyncMock(return_value=[
+            ArchivedClip(recorded_at=recorded, path=clip, poster=clip.with_suffix(".jpg")),
+            ArchivedClip(recorded_at=recorded, path=clip, poster=None),
+        ])
+        archive.url_path = MagicMock(side_effect=lambda path: f"/media/local/{path.name}")
+        entry.runtime_data.clip_archive = archive
+        stream = Entrypoint.from_dict({"id": "main", "capabilities": {"stream": True}})
+        camera = CompanionEntrypointCamera(entry, _coordinator(_state(entrypoints=(stream,))), entry.runtime_data.client, "main", "Main")
+        camera.hass = MagicMock()
+
+        with patch(
+            "bticino_companion.camera.async_sign_path",
+            side_effect=lambda hass, path, expiry, refresh_token_id=None: f"{path}?authSig={refresh_token_id}",
+        ):
+            clips = await camera.async_handle_card_ring_clips(5, "token-1")
+
+        archive.async_list.assert_awaited_once_with("main", 5)
+        self.assertEqual(clips[0], {
+            "recorded_at": recorded.isoformat(),
+            "url": "/media/local/2026-10-26_09-30-00.mp4?authSig=token-1",
+            "poster_url": "/media/local/2026-10-26_09-30-00.jpg?authSig=token-1",
+        })
+        self.assertIsNone(clips[1]["poster_url"])
 
 
 class _MockPlatform:

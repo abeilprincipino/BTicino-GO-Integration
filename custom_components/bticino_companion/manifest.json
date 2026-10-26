@@ -1,6 +1,7 @@
 {
   "domain": "bticino_companion",
   "name": "BTicino Companion",
+  "after_dependencies": ["media_source"],
   "codeowners": ["@r0bb10"],
   "config_flow": true,
   "dependencies": ["http", "lovelace", "zeroconf"],
