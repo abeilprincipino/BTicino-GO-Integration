@@ -79,6 +79,11 @@ class RingClipArchiver:
         """Whether a local media folder exists to archive into."""
         return self._root is not None
 
+    @property
+    def retention_days(self) -> int:
+        """How many days clips are kept; 0 keeps them forever."""
+        return self._retention_days
+
     async def async_start(self) -> None:
         """Purge, then follow the Companion state for new clips."""
         if self._root is None:

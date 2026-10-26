@@ -12,6 +12,7 @@ COMPONENT_PATH = Path(__file__).parents[1] / "custom_components"
 sys.path.insert(0, str(COMPONENT_PATH))
 
 try:
+    from bticino_companion import IntegrationRuntime, _async_options_updated
     from bticino_companion.config_flow import (
         CompanionConfigFlow,
         CompanionOptionsFlow,
@@ -354,3 +355,37 @@ class OptionsFlowTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(await flow.async_step_init({CONF_CLIP_RETENTION_DAYS: 5}), "created")
         flow.async_create_entry.assert_called_once_with(data={CONF_CLIP_RETENTION_DAYS: 5})
+
+
+class OptionsUpdateReloadTest(unittest.IsolatedAsyncioTestCase):
+    def _entry(self, options: dict, archived: int) -> SimpleNamespace:
+        clip_archive = MagicMock()
+        clip_archive.retention_days = archived
+        runtime = IntegrationRuntime(
+            client=MagicMock(),
+            coordinator=MagicMock(),
+            dynamic_entities=MagicMock(),
+            clip_archive=clip_archive,
+        )
+        return SimpleNamespace(entry_id="entry-id", options=options, runtime_data=runtime)
+
+    async def test_unchanged_retention_does_not_reload(self) -> None:
+        hass = SimpleNamespace(config_entries=SimpleNamespace(async_reload=AsyncMock()))
+
+        await _async_options_updated(hass, self._entry({CONF_CLIP_RETENTION_DAYS: 30}, archived=30))
+
+        hass.config_entries.async_reload.assert_not_awaited()
+
+    async def test_entry_data_update_does_not_reload(self) -> None:
+        hass = SimpleNamespace(config_entries=SimpleNamespace(async_reload=AsyncMock()))
+
+        await _async_options_updated(hass, self._entry({}, archived=30))
+
+        hass.config_entries.async_reload.assert_not_awaited()
+
+    async def test_changed_retention_reloads(self) -> None:
+        hass = SimpleNamespace(config_entries=SimpleNamespace(async_reload=AsyncMock()))
+
+        await _async_options_updated(hass, self._entry({CONF_CLIP_RETENTION_DAYS: 7}, archived=30))
+
+        hass.config_entries.async_reload.assert_awaited_once_with("entry-id")

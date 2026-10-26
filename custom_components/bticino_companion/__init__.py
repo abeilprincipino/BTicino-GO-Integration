@@ -17,9 +17,11 @@ from .clip_archive import RingClipArchiver
 from .const import (
     CARD_RESOURCE_URL,
     CONF_ACCESS_TOKEN,
+    CONF_CLIP_RETENTION_DAYS,
     CONF_COMPANION_URL,
     CONF_DEVICE_ID,
     DATA_FRONTEND_REGISTERED,
+    DEFAULT_CLIP_RETENTION_DAYS,
     DOMAIN,
     FRONTEND_PATH,
     PLATFORMS,
@@ -119,5 +121,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """A new retention takes effect through a reload, which restarts the archive."""
+    """A new retention takes effect through a reload, which restarts the archive.
+
+    Entry data updates (reauth, a new address) also call this; they must not reload.
+    """
+    runtime = getattr(entry, "runtime_data", None)
+    retention = int(entry.options.get(CONF_CLIP_RETENTION_DAYS, DEFAULT_CLIP_RETENTION_DAYS))
+    if isinstance(runtime, IntegrationRuntime) and runtime.clip_archive.retention_days == retention:
+        return
     await hass.config_entries.async_reload(entry.entry_id)
