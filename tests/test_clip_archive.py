@@ -72,7 +72,8 @@ class RingClipArchiverTest(unittest.IsolatedAsyncioTestCase):
         self.coordinator = MagicMock()
         self.coordinator.data = None
         self.coordinator.async_add_listener = MagicMock(return_value=lambda: None)
-        self.entry = MagicMock(options={})
+        # Keep every clip: RECORDED is a fixed date and would age out of a real retention window.
+        self.entry = MagicMock(options={CONF_CLIP_RETENTION_DAYS: 0})
         self._interval = patch("bticino_companion.clip_archive.async_track_time_interval", return_value=lambda: None)
         self._interval.start()
 
@@ -348,3 +349,52 @@ class RingClipArchiverTest(unittest.IsolatedAsyncioTestCase):
 
         levels = [record.levelname for record in logs.records if "download the ring clip" in record.getMessage()]
         self.assertEqual(levels, ["WARNING", "DEBUG", "DEBUG"])
+
+    async def test_a_save_during_the_purge_scan_is_not_lost(self) -> None:
+        self.entry.options = {CONF_CLIP_RETENTION_DAYS: 7}
+        archiver = self._archiver()
+        await archiver.async_start()
+        self.coordinator.async_update_listeners.reset_mock()
+
+        def scan(root):
+            archiver._latest["main"] = RECORDED
+            return {}
+
+        with patch("bticino_companion.clip_archive._scan_latest", side_effect=scan):
+            await archiver._async_purge()
+
+        self.assertEqual(archiver.latest("main"), RECORDED)
+        # The save itself already notified; the purge adds nothing new.
+        self.coordinator.async_update_listeners.assert_not_called()
+
+    async def test_skips_a_file_with_an_absurd_modification_time(self) -> None:
+        self.folder.mkdir(parents=True)
+        good = self.folder / "good.mp4"
+        good.write_bytes(b"x")
+        os.utime(good, (RECORDED.timestamp(), RECORDED.timestamp()))
+        (self.folder / "huge.mp4").write_bytes(b"x")
+        real_stat = Path.stat
+
+        def stat(path, *args, **kwargs):
+            if path.name == "huge.mp4":
+                return MagicMock(st_mtime=1e20)
+            return real_stat(path, *args, **kwargs)
+
+        archiver = self._archiver()
+        with patch.object(Path, "stat", stat):
+            await archiver.async_start()
+            clips = await archiver.async_list("main", 10)
+
+        self.assertEqual(archiver.latest("main"), RECORDED)
+        self.assertEqual([clip.path.name for clip in clips], ["good.mp4"])
+
+    async def test_a_failed_utime_does_not_abort_the_archive(self) -> None:
+        archiver = self._archiver()
+        await archiver.async_start()
+
+        with patch("bticino_companion.clip_archive.os.utime", side_effect=OSError("denied")):
+            await self._ring(archiver, ring_clip_recorded_at=RECORDED.isoformat())
+
+        self.assertEqual((self.folder / f"{CLIP_NAME}.mp4").read_bytes(), b"mp4")
+        self.assertEqual(archiver.latest("main"), RECORDED)
+        self.hass.bus.async_fire.assert_called_once()

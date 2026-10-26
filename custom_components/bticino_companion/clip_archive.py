@@ -39,6 +39,7 @@ CLIP_SUFFIX = ".mp4"
 POSTER_SUFFIX = ".jpg"
 NAME_FORMAT = "%Y-%m-%d_%H-%M-%S"
 FALLBACK_DEVICE_FOLDER = "companion"
+_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,7 +194,7 @@ class RingClipArchiver:
             self._checked[entrypoint.id] = recorded
             self._warned.pop(entrypoint.id, None)
             name = folder.name
-            if recorded > self._latest.get(name, datetime.min.replace(tzinfo=timezone.utc)):
+            if recorded > self._latest.get(name, _EPOCH):
                 self._latest[name] = recorded
             self._hass.bus.async_fire(
                 EVENT_RING_CLIP_SAVED,
@@ -228,14 +229,22 @@ class RingClipArchiver:
         if self._root is None or self._retention_days <= 0:
             return
         cutoff = dt_util.utcnow() - timedelta(days=self._retention_days)
+        before = dict(self._latest)
         try:
             await self._hass.async_add_executor_job(_purge, self._root, cutoff.timestamp())
             latest = await self._hass.async_add_executor_job(_scan_latest, self._root)
         except OSError as err:
             _LOGGER.warning("Unable to purge the ring clip archive: %s", err)
             return
-        if latest != self._latest:
-            self._latest = latest
+        # A clip saved while the scan ran may be missing from it: keep the newer
+        # time for any entrypoint whose time moved meanwhile. The others follow
+        # the scan, so an expired clip stops being advertised.
+        merged = dict(latest)
+        for key, recorded in self._latest.items():
+            if before.get(key) != recorded and recorded > merged.get(key, _EPOCH):
+                merged[key] = recorded
+        if merged != self._latest:
+            self._latest = merged
             if notify:
                 self._coordinator.async_update_listeners()
 
@@ -254,7 +263,11 @@ def _write_atomic(path: Path, data: bytes, recorded: datetime) -> None:
         with contextlib.suppress(OSError):
             os.unlink(temporary)
         raise
-    os.utime(path, (recorded.timestamp(), recorded.timestamp()))
+    try:
+        os.utime(path, (recorded.timestamp(), recorded.timestamp()))
+    except (OSError, OverflowError, ValueError) as err:
+        # The file is complete; only its modification time is off.
+        _LOGGER.debug("Unable to set the modification time of %s: %s", path, err)
 
 
 def _entries(folder: Path) -> list[Path]:
@@ -266,11 +279,13 @@ def _entries(folder: Path) -> list[Path]:
 
 
 def _mtime(path: Path) -> float | None:
-    """The modification time of a file, or None when it vanished or cannot be read."""
+    """The modification time of a file, or None when it vanished, cannot be read or is absurd."""
     try:
-        return path.stat().st_mtime
-    except OSError:
+        modified = path.stat().st_mtime
+        datetime.fromtimestamp(modified, timezone.utc)
+    except (OSError, OverflowError, ValueError):
         return None
+    return modified
 
 
 def _clips_in(folder: Path) -> list[tuple[float, Path]]:
