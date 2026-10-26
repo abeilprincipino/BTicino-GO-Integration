@@ -102,3 +102,38 @@ class CompanionBodyReadTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(CompanionApiError) as caught:
             await self._client(500, ValueError("bad json")).async_reboot()
         self.assertNotIsInstance(caught.exception, CompanionConnectionError)
+
+
+class _Response:
+    def __init__(self, status: int, body: bytes) -> None:
+        self.status = status
+        self._body = body
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args) -> None:
+        return None
+
+    async def read(self) -> bytes:
+        return self._body
+
+
+class CompanionRingClipTest(unittest.IsolatedAsyncioTestCase):
+    def _client(self, response: _Response) -> tuple[CompanionApiClient, MagicMock]:
+        session = MagicMock()
+        session.get = MagicMock(return_value=response)
+        return CompanionApiClient(session, "http://companion.invalid:8080", "token"), session
+
+    async def test_downloads_the_clip_as_mp4(self) -> None:
+        client, session = self._client(_Response(200, b"mp4"))
+
+        self.assertEqual(await client.async_entrypoint_clip_ring("main door"), b"mp4")
+        url = session.get.call_args.args[0]
+        self.assertEqual(url, "http://companion.invalid:8080/api/v3/entrypoints/main%20door/clip/ring.mp4")
+        self.assertEqual(session.get.call_args.kwargs["headers"]["Accept"], "video/mp4")
+
+    async def test_no_clip_yet_is_none(self) -> None:
+        client, _ = self._client(_Response(404, b""))
+
+        self.assertIsNone(await client.async_entrypoint_clip_ring("main"))

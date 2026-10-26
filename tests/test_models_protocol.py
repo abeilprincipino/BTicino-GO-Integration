@@ -157,6 +157,12 @@ class ModelsTest(unittest.TestCase):
         self.assertEqual(entrypoint.snapshot_updated_at.isoformat(), "2026-10-22T09:30:00+00:00")
         self.assertEqual(entrypoint.ring_snapshot_updated_at.isoformat(), "2026-10-22T09:30:00.120000+00:00")
 
+    def test_entrypoint_parses_the_ring_clip_time(self) -> None:
+        entrypoint = Entrypoint.from_dict({"id": "main", "ring_clip_recorded_at": "2026-10-26T09:30:00.123Z"})
+
+        self.assertEqual(entrypoint.ring_clip_recorded_at.isoformat(), "2026-10-26T09:30:00.123000+00:00")
+        self.assertIsNone(Entrypoint.from_dict({"id": "main"}).ring_clip_recorded_at)
+
 
 class ProtocolTest(unittest.TestCase):
     def test_ping_message(self) -> None:

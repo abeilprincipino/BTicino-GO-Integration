@@ -55,6 +55,7 @@ API_PATH_SYSTEM_SERVICE_RESTART = "/api/v3/system/services/{service}/restart"
 API_PATH_WEBRTC_WS = "/api/v3/webrtc/ws"
 API_PATH_SNAPSHOT_LATEST = "/api/v3/entrypoints/{entrypoint_id}/snapshot/latest.jpg"
 API_PATH_SNAPSHOT_RING = "/api/v3/entrypoints/{entrypoint_id}/snapshot/ring.jpg"
+API_PATH_CLIP_RING = "/api/v3/entrypoints/{entrypoint_id}/clip/ring.mp4"
 WEBSOCKET_PATH = "/api/v3/ws"
 
 WEBSOCKET_PING_INTERVAL_SECONDS = 20
@@ -64,3 +65,14 @@ WEBSOCKET_CONNECT_TIMEOUT_SECONDS = 10
 WEBSOCKET_CLOSE_TIMEOUT_SECONDS = 5
 WEBSOCKET_EXPECTED_DISCONNECT_COOLDOWN_SECONDS = 5
 WEBSOCKET_STABLE_CONNECTION_SECONDS = 5
+
+# Doorbell ring clips. See docs/superpowers/specs/2026-10-26-ring-clip-design.md
+# in the Companion repository.
+CONF_CLIP_RETENTION_DAYS = "clip_retention_days"
+DEFAULT_CLIP_RETENTION_DAYS = 30
+MAX_CLIP_RETENTION_DAYS = 3650
+CLIP_ARCHIVE_FOLDER = "bticino_go"
+CLIP_POSTER_WINDOW_SECONDS = 60
+CLIP_PURGE_INTERVAL_SECONDS = 24 * 60 * 60
+CLIP_URL_EXPIRY_SECONDS = 60 * 60
+EVENT_RING_CLIP_SAVED = f"{DOMAIN}_ring_clip_saved"
