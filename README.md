@@ -129,6 +129,7 @@ name: Front Door
 | --- | --- | --- |
 | `camera` | yes | The companion camera entity of the entrypoint to show. |
 | `name` | no | Card title. Defaults to the camera's friendly name. |
+| `clips` | no | Number of recent ring clips shown under the controls, 0–50 (default 10). 0 hides them. |
 
 What the card does:
 
@@ -184,8 +185,9 @@ answers and no card is open. The recording stops early when someone answers.
 - **Video only.** The intercom sends no audio before the call is answered.
 - **It starts 2–3 seconds after the ring**: the time to open the stream and receive the first full
   frame.
-- **The intercom keeps only the last clip.** Home Assistant downloads each new clip into
-  **Media › My media › bticino_go**, with the ring picture as its thumbnail. If Home Assistant is
+- **The intercom keeps only the last clip of each entrypoint.** Home Assistant downloads each new clip
+  into **Media › My media › bticino_go**, with the ring picture as its thumbnail when it was taken
+  within a minute of the clip. If Home Assistant is
   offline at the ring, the clip is downloaded when it reconnects, unless another ring replaced it.
 - **Retention:** Settings › Devices & services › BTicino Companion › Configure › *Ring clip
   retention (days)*. Default 30; 0 keeps clips forever.
@@ -218,7 +220,7 @@ automation:
             url: /media-browser/browser
 ```
 
-Replace `image.main_door_last_doorbell_ring` with your "Last doorbell ring" image entity.
+Replace `image.main_door_last_doorbell_ring` with your "Last doorbell ring" image entity, and `notify.mobile_app_my_phone` with your own notify service.
 
 ## Entities
 
