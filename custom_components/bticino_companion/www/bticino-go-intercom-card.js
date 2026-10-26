@@ -1,3 +1,23 @@
+// Shared by the whole card. Scoped selectors: the carousel and the clip player
+// have buttons and images of their own.
+const CARD_STYLES = `
+  :host { display: block; } ha-card { overflow: hidden; }
+  .title-bar { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 0; }
+  .title { font-size: 16px; font-weight: 600; } .subtitle { color: var(--secondary-text-color); font-size: 12px; margin-top: 2px; }
+  .status { align-items: center; color: var(--secondary-text-color); display: flex; font-size: 12px; gap: 6px; }
+  .dot { border-radius: 50%; height: 8px; width: 8px; } .dot-idle { background: rgba(127,127,127,.4); } .dot-active { background: #2e7d32; }
+  .dot-ringing, .dot-connecting { animation: pulse 1.2s ease-in-out infinite; } .dot-ringing { background: #f9a825; } .dot-connecting { background: #90caf9; }
+  @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .5; transform: scale(1.3); } }
+  .viewer { position: relative; background: #111; aspect-ratio: 4 / 3; display: grid; place-items: center; }
+  .live { display: grid; inset: 0; place-items: center; position: absolute; }
+  .playback { background: #111; display: grid; inset: 0; place-items: center; position: absolute; z-index: 1; }
+  .live img, .live video { width: 100%; height: 100%; object-fit: cover; } .placeholder { color: #aaa; } .hidden { display: none !important; }
+  .ring-overlay { align-items: center; background: rgba(0,0,0,.55); color: #fff; display: flex; flex-direction: column; gap: 8px; inset: 0; justify-content: center; position: absolute; }
+  .ring-pulse { animation: pulse 1.2s ease-in-out infinite; background: #f9a825; border-radius: 50%; height: 20px; width: 20px; } .ring-label { font-size: 16px; font-weight: 600; }
+  .controls { display: flex; justify-content: center; gap: 16px; padding: 14px; } .controls button { align-items: center; border: 0; border-radius: 50%; color: #fff; cursor: pointer; display: flex; height: 52px; justify-content: center; width: 52px; } .controls button:disabled { cursor: not-allowed; opacity: .4; } .controls button ha-icon { --mdc-icon-size: 26px; }
+  .call { background: #2e7d32; } .end { background: #c62828; } .mute { background: #546e7a; } .unlock { background: #6d6d6d; } .error { color: var(--error-color); padding: 0 14px 12px; font-size: 13px; }
+`;
+
 class BTicinoGoIntercomCard extends HTMLElement {
   constructor() {
     super();
@@ -34,6 +54,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
     // True after this card closed its view because another device answered;
     // cleared when that call ends.
     this._leftForElsewhere = false;
+    this._skeleton = false;
   }
 
   setConfig(config) {
@@ -308,7 +329,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
   }
 
   _attachVideo() {
-    const video = this.shadowRoot?.querySelector("video");
+    const video = this.shadowRoot?.querySelector(".live video");
     if (video && this._remoteStream && video.srcObject !== this._remoteStream) {
       video.srcObject = this._remoteStream;
       // A ringing preview starts without a user gesture, and the autoplay policy
@@ -472,6 +493,16 @@ class BTicinoGoIntercomCard extends HTMLElement {
     }[character]));
   }
 
+  // The parts _render() rewrites on every hass update live in their own
+  // containers; the clip player and the carousel do not, so a playing clip or a
+  // scrolled strip survives. See docs/superpowers/specs/2026-10-26-ring-clip-design.md
+  // in the Companion repository.
+  _ensureSkeleton() {
+    if (this._skeleton || !this.shadowRoot) return;
+    this.shadowRoot.innerHTML = `<style>${CARD_STYLES}</style><ha-card><div class="top"></div><div class="viewer"><div class="live"></div><div class="playback hidden"></div></div><div class="bottom"></div><section class="clips hidden"></section></ha-card>`;
+    this._skeleton = true;
+  }
+
   _render() {
     if (!this.shadowRoot) return;
     const name = this._config.name || this._cameraState()?.attributes?.friendly_name || this._config.camera || "Intercom";
@@ -509,32 +540,20 @@ class BTicinoGoIntercomCard extends HTMLElement {
           : remoteActive
             ? [callState === "preview" ? "Preview" : "Active", "active"]
             : ["Idle", "idle"];
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host { display: block; } ha-card { overflow: hidden; }
-        .title-bar { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 0; }
-        .title { font-size: 16px; font-weight: 600; } .subtitle { color: var(--secondary-text-color); font-size: 12px; margin-top: 2px; }
-        .status { align-items: center; color: var(--secondary-text-color); display: flex; font-size: 12px; gap: 6px; }
-        .dot { border-radius: 50%; height: 8px; width: 8px; } .dot-idle { background: rgba(127,127,127,.4); } .dot-active { background: #2e7d32; }
-        .dot-ringing, .dot-connecting { animation: pulse 1.2s ease-in-out infinite; } .dot-ringing { background: #f9a825; } .dot-connecting { background: #90caf9; }
-        @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .5; transform: scale(1.3); } }
-        .viewer { position: relative; background: #111; aspect-ratio: 4 / 3; display: grid; place-items: center; } img, video { width: 100%; height: 100%; object-fit: cover; } .placeholder { color: #aaa; } .hidden { display: none !important; }
-        .ring-overlay { align-items: center; background: rgba(0,0,0,.55); color: #fff; display: flex; flex-direction: column; gap: 8px; inset: 0; justify-content: center; position: absolute; }
-        .ring-pulse { animation: pulse 1.2s ease-in-out infinite; background: #f9a825; border-radius: 50%; height: 20px; width: 20px; } .ring-label { font-size: 16px; font-weight: 600; }
-        .controls { display: flex; justify-content: center; gap: 16px; padding: 14px; } button { align-items: center; border: 0; border-radius: 50%; color: #fff; cursor: pointer; display: flex; height: 52px; justify-content: center; width: 52px; } button:disabled { cursor: not-allowed; opacity: .4; } button ha-icon { --mdc-icon-size: 26px; }
-        .call { background: #2e7d32; } .end { background: #c62828; } .mute { background: #546e7a; } .unlock { background: #6d6d6d; } .error { color: var(--error-color); padding: 0 14px 12px; font-size: 13px; }
-      </style>
-      <ha-card><div class="title-bar"><div><div class="title">${this._escape(name)}</div><div class="subtitle">${this._escape(entrypoint)}</div></div><div class="status"><span class="dot dot-${status[1]}"></span>${status[0]}</div></div><div class="viewer">
+    this._ensureSkeleton();
+    const root = this.shadowRoot;
+    root.querySelector(".top").innerHTML = `<div class="title-bar"><div><div class="title">${this._escape(name)}</div><div class="subtitle">${this._escape(entrypoint)}</div></div><div class="status"><span class="dot dot-${status[1]}"></span>${status[0]}</div></div>`;
+    root.querySelector(".live").innerHTML = `
         <img class="${active || !snapshot ? "hidden" : ""}" src="${this._escape(snapshot)}" alt="${this._escape(name)}" />
         <div class="placeholder ${active || snapshot ? "hidden" : ""}">No snapshot available</div>
         <video class="${this._connected ? "" : "hidden"}" playsinline autoplay></video>
-        <div class="ring-overlay ${ringing && !active ? "" : "hidden"}"><div class="ring-pulse"></div><div class="ring-label">${this._escape(entrypoint)}</div><div>Incoming call</div></div>
-      </div><div class="controls">
+        <div class="ring-overlay ${ringing && !active ? "" : "hidden"}"><div class="ring-pulse"></div><div class="ring-label">${this._escape(entrypoint)}</div><div>Incoming call</div></div>`;
+    root.querySelector(".bottom").innerHTML = `<div class="controls">
         <button class="call ${(active && !this._preview) || (ringing && !canAnswer) || (this._leftForElsewhere && inCall) ? "hidden" : ""}" title="${canAnswer ? "Answer" : "Start live view"}"><ha-icon icon="mdi:phone"></ha-icon></button>
         <button class="end ${canEnd ? "" : "hidden"}" title="${inCall ? "Hang up" : "End live view"}"><ha-icon icon="mdi:phone-hangup"></ha-icon></button>
         <button class="mute ${this._connected && this._micTrack ? "" : "hidden"}" title="${this._muted ? "Unmute" : "Mute"}"><ha-icon icon="${this._muted ? "mdi:microphone-off" : "mdi:microphone"}"></ha-icon></button>
         <button class="unlock" title="Unlock"><ha-icon icon="mdi:lock-open"></ha-icon></button>
-       </div><div class="error ${this._error ? "" : "hidden"}">${this._escape(this._error)}</div></ha-card>`;
+       </div><div class="error ${this._error ? "" : "hidden"}">${this._escape(this._error)}</div>`;
     this.shadowRoot.querySelector(".call")?.addEventListener("click", () => (canAnswer ? this._answer() : this._start()));
     this.shadowRoot.querySelector(".end")?.addEventListener("click", () => (inCall ? this._hangup() : this._end()));
     this.shadowRoot.querySelector(".mute")?.addEventListener("click", () => this._toggleMute());
