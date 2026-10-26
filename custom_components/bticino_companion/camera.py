@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import logging
 from typing import Any
 
@@ -93,7 +94,7 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
         )
         active = bool(state and state.active_entrypoint_id == self._entrypoint_id)
         call_state = state.call_state if state and active else "idle"
-        return {
+        attributes: dict[str, str | bool] = {
             "bticino_entrypoint_id": self._entrypoint_id,
             "bticino_entrypoint_label": entrypoint.label if entrypoint and entrypoint.label else self._attr_name,
             "bticino_call_state": call_state,
@@ -109,6 +110,16 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
                 active and state and state.last_call_end_reason == "elsewhere"
             ),
         }
+        # The card reloads its list of ring clips when this changes.
+        latest = self._last_ring_clip_at()
+        if latest is not None:
+            attributes["bticino_last_ring_clip_at"] = latest.isoformat()
+        return attributes
+
+    def _last_ring_clip_at(self) -> datetime | None:
+        archive = getattr(self._entry.runtime_data, "clip_archive", None)
+        latest = archive.latest(self._entrypoint_id) if archive is not None else None
+        return latest if isinstance(latest, datetime) else None
 
     async def async_handle_async_webrtc_offer(
         self, offer_sdp: str, session_id: str, send_message: WebRTCSendMessage

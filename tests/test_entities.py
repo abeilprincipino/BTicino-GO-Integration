@@ -392,6 +392,27 @@ class RingSnapshotImageTest(unittest.IsolatedAsyncioTestCase):
         entry.runtime_data.client.async_entrypoint_snapshot_ring.assert_not_awaited()
 
 
+class CameraRingClipAttributeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_exposes_the_last_archived_clip(self) -> None:
+        entry = _MockEntry()
+        recorded = datetime(2026, 10, 26, 9, 30, tzinfo=timezone.utc)
+        entry.runtime_data.clip_archive = MagicMock()
+        entry.runtime_data.clip_archive.latest = MagicMock(return_value=recorded)
+        stream = Entrypoint.from_dict({"id": "main", "capabilities": {"stream": True}})
+        camera = CompanionEntrypointCamera(entry, _coordinator(_state(entrypoints=(stream,))), entry.runtime_data.client, "main", "Main")
+
+        self.assertEqual(camera.extra_state_attributes["bticino_last_ring_clip_at"], recorded.isoformat())
+
+    async def test_no_attribute_before_the_first_clip(self) -> None:
+        entry = _MockEntry()
+        entry.runtime_data.clip_archive = MagicMock()
+        entry.runtime_data.clip_archive.latest = MagicMock(return_value=None)
+        stream = Entrypoint.from_dict({"id": "main", "capabilities": {"stream": True}})
+        camera = CompanionEntrypointCamera(entry, _coordinator(_state(entrypoints=(stream,))), entry.runtime_data.client, "main", "Main")
+
+        self.assertNotIn("bticino_last_ring_clip_at", camera.extra_state_attributes)
+
+
 class _MockPlatform:
     def __init__(self) -> None:
         self.entities: dict[str, object] = {}

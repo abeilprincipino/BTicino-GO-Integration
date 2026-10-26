@@ -13,6 +13,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import CompanionApiClient, CompanionAuthError
+from .clip_archive import RingClipArchiver
 from .const import (
     CARD_RESOURCE_URL,
     CONF_ACCESS_TOKEN,
@@ -36,6 +37,7 @@ class IntegrationRuntime:
     client: CompanionApiClient
     coordinator: CompanionCoordinator
     dynamic_entities: DynamicEntityManager
+    clip_archive: RingClipArchiver
 
     async def async_update_base_url(self, base_url: str) -> None:
         """Move the live transports to a newly discovered Companion address."""
@@ -61,16 +63,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryNotReady(str(err)) from err
 
     dynamic_entities = DynamicEntityManager(hass, entry, coordinator, client)
+    clip_archive = RingClipArchiver(hass, entry, coordinator, client, str(entry.data[CONF_DEVICE_ID]))
     runtime = IntegrationRuntime(
         client=client,
         coordinator=coordinator,
         dynamic_entities=dynamic_entities,
+        clip_archive=clip_archive,
     )
     entry.runtime_data = runtime
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
     await _async_register_frontend(hass)
     dynamic_entities.async_start()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    await clip_archive.async_start()
     return True
 
 
@@ -107,5 +112,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return False
     runtime = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     if isinstance(runtime, IntegrationRuntime):
+        await runtime.clip_archive.async_stop()
         await runtime.coordinator.async_stop()
     return True
