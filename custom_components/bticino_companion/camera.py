@@ -86,7 +86,7 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
         )
 
     @property
-    def extra_state_attributes(self) -> dict[str, str | bool]:
+    def extra_state_attributes(self) -> dict[str, Any]:
         """Expose entrypoint-scoped call state for the bundled dynamic card."""
         state = self.coordinator.data
         entrypoint = (
@@ -96,7 +96,7 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
         )
         active = bool(state and state.active_entrypoint_id == self._entrypoint_id)
         call_state = state.call_state if state and active else "idle"
-        attributes: dict[str, str | bool] = {
+        attributes: dict[str, Any] = {
             "bticino_entrypoint_id": self._entrypoint_id,
             "bticino_entrypoint_label": entrypoint.label if entrypoint and entrypoint.label else self._attr_name,
             "bticino_call_state": call_state,
@@ -111,6 +111,13 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
             "bticino_answered_elsewhere": bool(
                 active and state and state.last_call_end_reason == "elsewhere"
             ),
+            # Every lock of this intercom, in the Companion's order: the card
+            # offers one button each, not just this camera's own entrypoint.
+            "bticino_unlocks": [
+                {"id": item.id, "label": item.label or item.id}
+                for item in (state.entrypoints if state else ())
+                if item.capabilities.unlock
+            ],
         }
         # The card reloads its list of ring clips when this changes.
         latest = self._last_ring_clip_at()
@@ -226,9 +233,17 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
             raise ValueError("Unknown WebRTC session for this camera")
         await self._client.async_webrtc_candidate(session_id=session_id, candidate=candidate)
 
-    async def async_handle_card_unlock(self) -> None:
-        """Unlock the entrypoint represented by this camera."""
-        await self._client.async_unlock_entrypoint(self._entrypoint_id)
+    async def async_handle_card_unlock(self, entrypoint_id: str | None = None) -> None:
+        """Unlock this camera's entrypoint, or another lock of the same intercom."""
+        target = entrypoint_id or self._entrypoint_id
+        if target != self._entrypoint_id:
+            state = self.coordinator.data
+            if not any(
+                item.id == target and item.capabilities.unlock
+                for item in (state.entrypoints if state else ())
+            ):
+                raise ValueError(f"Entrypoint '{target}' cannot be unlocked from this camera")
+        await self._client.async_unlock_entrypoint(target)
 
     async def async_handle_card_call_answer(self) -> None:
         """Answer the call ringing on this camera's entrypoint."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .api import CompanionApiClient, CompanionAuthError
 from .clip_archive import RingClipArchiver
 from .const import (
-    CARD_RESOURCE_URL,
+    CARD_FILE,
     CONF_ACCESS_TOKEN,
     CONF_CLIP_RETENTION_DAYS,
     CONF_COMPANION_URL,
@@ -87,9 +88,19 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     if hass.data.get(DATA_FRONTEND_REGISTERED):
         return
 
+    www = Path(__file__).parent / "www"
     await hass.http.async_register_static_paths(
-        [StaticPathConfig(FRONTEND_PATH, str(Path(__file__).parent / "www"), cache_headers=False)]
+        [StaticPathConfig(FRONTEND_PATH, str(www), cache_headers=False)]
     )
+
+    # The URL carries a digest of the card, so a new card is a new URL: the
+    # frontend and the mobile apps cache modules by URL and would otherwise
+    # keep running the old card after an update.
+    digest = await hass.async_add_executor_job(
+        lambda: hashlib.sha256((www / CARD_FILE).read_bytes()).hexdigest()[:12]
+    )
+    card_url = f"{FRONTEND_PATH}/{CARD_FILE}?v={digest}"
+
     resources = hass.data["lovelace"].resources
     if not resources.loaded:
         await resources.async_load()
@@ -97,13 +108,13 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     for resource in resources.async_items():
         if not resource["url"].startswith(f"{FRONTEND_PATH}/"):
             continue
-        if resource["url"] != CARD_RESOURCE_URL:
+        if resource["url"] != card_url:
             await resources.async_update_item(
-                resource["id"], {"res_type": "module", "url": CARD_RESOURCE_URL}
+                resource["id"], {"res_type": "module", "url": card_url}
             )
         break
     else:
-        await resources.async_create_item({"res_type": "module", "url": CARD_RESOURCE_URL})
+        await resources.async_create_item({"res_type": "module", "url": card_url})
 
     async_register_websocket_commands(hass)
     hass.data[DATA_FRONTEND_REGISTERED] = True

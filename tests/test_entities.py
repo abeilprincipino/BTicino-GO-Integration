@@ -317,6 +317,9 @@ class TypedControlTest(unittest.IsolatedAsyncioTestCase):
                 "bticino_call_state": "idle",
                 "bticino_is_active_entrypoint": False,
                 "bticino_is_ringing": False,
+                "bticino_can_answer": False,
+                "bticino_answered_elsewhere": False,
+                "bticino_unlocks": [],
             },
         )
 
@@ -325,6 +328,47 @@ class TypedControlTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(camera.extra_state_attributes["bticino_call_state"], "ringing")
         self.assertTrue(camera.extra_state_attributes["bticino_is_ringing"])
+
+    def _intercom_camera(self, entry) -> CompanionEntrypointCamera:
+        entrypoints = (
+            Entrypoint.from_dict({"id": "main", "label": "Ingresso", "capabilities": {"stream": True, "unlock": True, "ring": True}}),
+            Entrypoint.from_dict({"id": "luci", "label": "Luci", "capabilities": {"unlock": True}}),
+            Entrypoint.from_dict({"id": "spia", "label": "Spia", "capabilities": {}}),
+            Entrypoint.from_dict({"id": "cancello", "capabilities": {"unlock": True}}),
+        )
+        return CompanionEntrypointCamera(
+            entry, _coordinator(_state(entrypoints=entrypoints)), entry.runtime_data.client, "main", "Ingresso"
+        )
+
+    async def test_camera_lists_every_lock_of_the_intercom(self) -> None:
+        camera = self._intercom_camera(_MockEntry())
+
+        self.assertEqual(
+            camera.extra_state_attributes["bticino_unlocks"],
+            [
+                {"id": "main", "label": "Ingresso"},
+                {"id": "luci", "label": "Luci"},
+                {"id": "cancello", "label": "cancello"},
+            ],
+        )
+
+    async def test_card_unlock_opens_any_lock_of_the_same_intercom(self) -> None:
+        entry = _MockEntry()
+        camera = self._intercom_camera(entry)
+
+        await camera.async_handle_card_unlock()
+        await camera.async_handle_card_unlock("luci")
+
+        self.assertEqual(
+            [call.args for call in entry.runtime_data.client.async_unlock_entrypoint.await_args_list],
+            [("main",), ("luci",)],
+        )
+
+        for refused in ("spia", "unknown"):
+            with self.assertRaises(ValueError):
+                await camera.async_handle_card_unlock(refused)
+
+        self.assertEqual(entry.runtime_data.client.async_unlock_entrypoint.await_count, 2)
 
     async def test_camera_is_available_when_stream_is_configured_but_idle(self) -> None:
         entry = _MockEntry()

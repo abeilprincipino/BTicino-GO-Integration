@@ -104,13 +104,15 @@ async def _handle_close(hass: HomeAssistant, connection, msg: dict[str, Any]) ->
     {
         vol.Required("type"): "bticino_companion/card_unlock",
         vol.Required("camera_entity_id"): str,
+        vol.Optional("entrypoint_id"): str,
     }
 )
 @websocket_api.async_response
 async def _handle_unlock(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
-    """Unlock the entrypoint represented by the configured camera."""
+    """Unlock the camera's entrypoint, or the named lock of the same intercom."""
+    entrypoint_id = str(msg.get("entrypoint_id", "")).strip() or None
     try:
-        await _camera_for_message(hass, msg).async_handle_card_unlock()
+        await _camera_for_message(hass, msg).async_handle_card_unlock(entrypoint_id)
     except (CompanionApiError, HomeAssistantError, ValueError) as err:
         connection.send_error(msg["id"], "unlock_failed", str(err))
         return

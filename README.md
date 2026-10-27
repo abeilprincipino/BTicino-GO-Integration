@@ -130,6 +130,24 @@ name: Front Door
 | `camera` | yes | The companion camera entity of the entrypoint to show. |
 | `name` | no | Card title. Defaults to the camera's friendly name. |
 | `clips` | no | Number of recent ring clips shown under the controls, 0–50 (default 10). 0 hides them. |
+| `unlocks` | no | Per-lock overrides, keyed by entrypoint id: `icon`, `name` (button tooltip) and `hide: true`. |
+
+The card shows one unlock button for every entrypoint of the intercom that can unlock, not only
+the camera's own, in the order the Companion lists them. Each defaults to `mdi:lock-open` and the
+entrypoint label:
+
+```yaml
+type: custom:bticino-go-intercom-card
+camera: camera.ingresso
+unlocks:
+  main:
+    icon: mdi:door-open
+  luci:
+    icon: mdi:lightbulb-on
+    name: Luci scale
+  cancello:
+    icon: mdi:gate-open
+```
 
 What the card does:
 
@@ -138,8 +156,8 @@ What the card does:
   live video with audio.
 - **Incoming call**: shows a ringing overlay and a muted ringing preview. The green button answers
   the call; the microphone is requested only when you answer.
-- **Hang up / end live view** (red button), **mute microphone** while in a call, and **unlock** the
-  entrypoint.
+- **Hang up / end live view** (red button), **mute microphone** while in a call, and **unlock**
+  any lock of the intercom (one button each).
 - Shows *Answered elsewhere* when another client answers the call.
 
 The microphone needs a secure context: open Home Assistant over HTTPS (or `localhost`) for two-way

@@ -8,7 +8,7 @@ DATA_CAMERA_ENTITIES = f"{DOMAIN}_camera_entities"
 DATA_FRONTEND_REGISTERED = f"{DOMAIN}_frontend_registered"
 DATA_PENDING_REAUTH_URLS = f"{DOMAIN}_pending_reauth_urls"
 FRONTEND_PATH = "/bticino_companion_static"
-CARD_RESOURCE_URL = f"{FRONTEND_PATH}/bticino-go-intercom-card.js?automatically-added"
+CARD_FILE = "bticino-go-intercom-card.js"
 
 PLATFORMS: list[str] = [
     "camera",
