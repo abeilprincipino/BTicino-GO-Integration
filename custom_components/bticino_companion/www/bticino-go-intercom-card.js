@@ -15,7 +15,7 @@ const CARD_STYLES = `
   .ring-overlay { align-items: center; background: rgba(0,0,0,.55); color: #fff; display: flex; flex-direction: column; gap: 8px; inset: 0; justify-content: center; position: absolute; }
   .ring-pulse { animation: pulse 1.2s ease-in-out infinite; background: #f9a825; border-radius: 50%; height: 20px; width: 20px; } .ring-label { font-size: 16px; font-weight: 600; }
   .controls { display: flex; flex-wrap: wrap; justify-content: center; gap: 16px; padding: 14px; } .controls button { align-items: center; border: 0; border-radius: 50%; color: #fff; cursor: pointer; display: flex; height: 52px; justify-content: center; width: 52px; } .controls button:disabled { cursor: not-allowed; opacity: .4; } .controls button ha-icon { --mdc-icon-size: 26px; }
-  .call { background: #2e7d32; } .end { background: #c62828; } .mute { background: #546e7a; } .unlock { background: #6d6d6d; } .error { color: var(--error-color); padding: 0 14px 12px; font-size: 13px; }
+  .call { background: #2e7d32; } .end, .decline { background: #c62828; } .mute { background: #546e7a; } .unlock { background: #6d6d6d; } .error { color: var(--error-color); padding: 0 14px 12px; font-size: 13px; }
   .playback video { background: #111; height: 100%; object-fit: contain; width: 100%; }
   .playback-bar { align-items: center; background: linear-gradient(rgba(0,0,0,.6), transparent); color: #fff; display: flex; font-size: 13px; font-weight: 500; justify-content: space-between; left: 0; padding: 8px 8px 22px 14px; pointer-events: none; position: absolute; right: 0; top: 0; }
   .round { align-items: center; background: rgba(0,0,0,.5); border: 0; border-radius: 50%; color: #fff; cursor: pointer; display: flex; justify-content: center; pointer-events: auto; }
@@ -774,6 +774,9 @@ class BTicinoGoIntercomCard extends HTMLElement {
     // later inbound call would be answered busy, until the companion restarts.
     const inCall = callState === "active";
     const canEnd = (active && !this._preview) || inCall;
+    // A ringing SIP call can be refused. The companion answers it 603 Decline,
+    // which ends every fork of the doorbell call, the indoor unit's included.
+    const canDecline = this._canAnswer() && !canEnd;
     const status = this._leftForElsewhere && inCall
       ? ["In a call on another device", "active"]
       : this._elsewhereUntil
@@ -801,11 +804,13 @@ class BTicinoGoIntercomCard extends HTMLElement {
         <div class="ring-overlay ${ringing && !active ? "" : "hidden"}"><div class="ring-pulse"></div><div class="ring-label">${this._escape(entrypoint)}</div><div>Incoming call</div></div>`;
     root.querySelector(".bottom").innerHTML = `<div class="controls">
         <button class="call ${(active && !this._preview) || (ringing && !canAnswer) || (this._leftForElsewhere && inCall) ? "hidden" : ""}" title="${canAnswer ? "Answer" : "Start live view"}"><ha-icon icon="mdi:phone"></ha-icon></button>
+        <button class="decline ${canDecline ? "" : "hidden"}" title="Decline" aria-label="Decline call"><ha-icon icon="mdi:phone-hangup"></ha-icon></button>
         <button class="end ${canEnd ? "" : "hidden"}" title="${inCall ? "Hang up" : "End live view"}"><ha-icon icon="mdi:phone-hangup"></ha-icon></button>
         <button class="mute ${this._connected && this._micTrack ? "" : "hidden"}" title="${this._muted ? "Unmute" : "Mute"}"><ha-icon icon="${this._muted ? "mdi:microphone-off" : "mdi:microphone"}"></ha-icon></button>
         ${this._unlockButtons().map((unlock) => `<button class="unlock" data-entrypoint="${this._escape(unlock.id)}" title="${this._escape(unlock.name)}" aria-label="${this._escape(unlock.name)}"><ha-icon icon="${this._escape(unlock.icon)}"></ha-icon></button>`).join("")}
        </div><div class="error ${this._error ? "" : "hidden"}">${this._escape(this._error)}</div>`;
     this.shadowRoot.querySelector(".call")?.addEventListener("click", () => (canAnswer ? this._answer() : this._start()));
+    this.shadowRoot.querySelector(".decline")?.addEventListener("click", () => this._hangup());
     this.shadowRoot.querySelector(".end")?.addEventListener("click", () => (inCall ? this._hangup() : this._end()));
     this.shadowRoot.querySelector(".mute")?.addEventListener("click", () => this._toggleMute());
     this.shadowRoot.querySelectorAll(".unlock").forEach((button) => button.addEventListener("click", () => this._unlock(button.dataset.entrypoint).catch((err) => { this._error = err.message; this._render(); })));

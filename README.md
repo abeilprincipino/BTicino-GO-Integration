@@ -155,7 +155,8 @@ What the card does:
 - **Live view** (green phone button): opens a WebRTC session through Home Assistant and shows the
   live video with audio.
 - **Incoming call**: shows a ringing overlay and a muted ringing preview. The green button answers
-  the call; the microphone is requested only when you answer.
+  the call; the microphone is requested only when you answer. The red button declines it, which
+  also stops the indoor unit ringing.
 - **Hang up / end live view** (red button), **mute microphone** while in a call, and **unlock**
   any lock of the intercom (one button each).
 - Shows *Answered elsewhere* when another client answers the call.
