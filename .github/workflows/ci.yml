@@ -1,0 +1,49 @@
+name: "CI"
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+  push:
+    branches:
+      - develop
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate-hacs:
+    name: "HACS Validation"
+    runs-on: "ubuntu-latest"
+    steps:
+      - name: "Checkout the repository"
+        uses: "actions/checkout@v6"
+
+      - name: "Run HACS validation"
+        uses: "hacs/action@main"
+        with:
+          category: "integration"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          ignore: "brands topics description"
+
+  validate-hassfest:
+    name: "HASSFest Validation"
+    runs-on: "ubuntu-latest"
+    steps:
+      - name: "Checkout the repository"
+        uses: "actions/checkout@v6"
+
+      - name: "Run HASSFest validation"
+        uses: home-assistant/actions/hassfest@master
+
+  test:
+    name: "Tests"
+    runs-on: "ubuntu-latest"
+    steps:
+      - name: "Checkout the repository"
+        uses: "actions/checkout@v6"
+
+      - name: "Run the tests in the Home Assistant image"
+        run: docker build --target test .

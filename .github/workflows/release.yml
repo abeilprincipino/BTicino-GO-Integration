@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to release (example: 2026.5.0)"
+        description: "Tag to create on the selected branch (beta from develop: 2026.11.1b1, release from main: 2026.11.1)"
         required: true
         type: string
 
@@ -39,31 +39,77 @@ jobs:
       - name: "Run HASSFest validation"
         uses: home-assistant/actions/hassfest@master
 
+  test:
+    name: "Tests"
+    runs-on: "ubuntu-latest"
+    steps:
+      - name: "Checkout the repository"
+        uses: "actions/checkout@v6"
+
+      - name: "Run the tests in the Home Assistant image"
+        run: docker build --target test .
+
   release:
     name: "Release"
     runs-on: "ubuntu-latest"
     needs:
       - validate-hacs
       - validate-hassfest
+      - test
     permissions:
       contents: write
     steps:
       - name: "Checkout the repository"
         uses: "actions/checkout@v6"
+        with:
+          fetch-depth: 0
 
       - name: "Resolve tag name"
         id: "meta"
         shell: "bash"
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
+          set -eu
           TAG="${GITHUB_REF_NAME}"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            TAG="$(printf '%s' "${INPUT_TAG}" | tr -d '[:space:]')"
+            if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null; then
+              echo "::error::Tag ${TAG} already exists. Choose a new one."
+              exit 1
+            fi
           fi
-          if [ -z "${TAG}" ]; then
-            echo "Tag name is empty" >&2
+          # Home Assistant versions: 2026.11.1 or 2026.11.1.2, betas 2026.11.1b1 (also a1, rc1).
+          if ! printf '%s' "${TAG}" | grep -Eq '^[0-9]+(\.[0-9]+){2,3}((a|b|rc)[0-9]+)?$'; then
+            echo "::error::Tag '${TAG}' must look like 2026.11.1 or 2026.11.1b1."
             exit 1
           fi
+          PRERELEASE=false
+          if printf '%s' "${TAG}" | grep -Eq '(a|b|rc)[0-9]+$'; then
+            PRERELEASE=true
+          fi
           echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "prerelease=${PRERELEASE}" >> "${GITHUB_OUTPUT}"
+
+      - name: "Check the tag's branch"
+        shell: "bash"
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+        run: |
+          set -eu
+          git fetch --no-tags origin main develop
+          on_branch() { git merge-base --is-ancestor "${GITHUB_SHA}" "origin/$1" 2>/dev/null; }
+          if [ "${PRERELEASE}" = "true" ]; then
+            # A beta is cut from develop; main is accepted for a pre-release of a hotfix.
+            if ! on_branch develop && ! on_branch main; then
+              echo "::error::Pre-release ${TAG} must point to a commit on develop or main."
+              exit 1
+            fi
+          elif ! on_branch main; then
+            echo "::error::Release ${TAG} must point to a commit on main. Merge develop into main first."
+            exit 1
+          fi
 
       - name: "Adjust version number"
         shell: "bash"
@@ -81,7 +127,10 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
+          # A new tag is created on the commit this run built, not on the default branch.
+          target_commitish: ${{ github.sha }}
           name: ${{ steps.meta.outputs.tag }}
+          prerelease: ${{ steps.meta.outputs.prerelease == 'true' }}
           generate_release_notes: true
           overwrite_files: true
           files: ${{ github.workspace }}/custom_components/bticino_companion/bticino_companion.zip

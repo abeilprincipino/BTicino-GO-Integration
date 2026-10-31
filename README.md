@@ -262,6 +262,8 @@ change. They include:
 
 - **HACS** — HACS shows new releases of this repository; update and restart Home Assistant.
 - **Manual** — replace `custom_components/bticino_companion` and restart Home Assistant.
+- **Betas** — betas are published as GitHub pre-releases (for example `2026.11.1b1`). In HACS, open
+  this repository, choose **⋮ > Redownload** and enable **Show beta versions** to install one.
 
 After an update, reload the dashboard (or clear the browser cache) so the browser loads the new card.
 
@@ -320,6 +322,9 @@ The integration is a standard Home Assistant custom component under
 - `www/bticino-go-intercom-card.js` — the intercom card.
 
 Tests run in Docker: `docker build .` (see the [Dockerfile](Dockerfile)).
+
+Pull requests target the `develop` branch; betas are published from `develop` before changes reach
+`main` and an official release. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 This integration is developed together with
 [BTicino GO Companion](https://github.com/abeilprincipino/BTicino-GO-Companion), since most features
