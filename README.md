@@ -20,6 +20,7 @@ answer, talk, hang up, and unlock from a dashboard.
 - [Setup](#setup)
 - [Intercom Card](#intercom-card)
 - [Doorbell notifications with the picture](#doorbell-notifications-with-the-picture)
+- [Answer or decline from a notification](#answer-or-decline-from-a-notification)
 - [Ring clips](#ring-clips)
 - [Entities](#entities)
 - [Updating](#updating)
@@ -195,6 +196,32 @@ automation:
 
 If the Companion cannot open the stream during a ring, no picture is taken and the entity does not
 change, so no notification is sent for that ring.
+
+## Answer or decline from a notification
+
+The card answers or declines the ringing call when its dashboard is opened with
+`?bticino_answer=<camera>` or `?bticino_decline=<camera>`, where `<camera>` is the card's `camera`
+entity. Point the actions of the doorbell notification at the view that holds the card:
+
+```yaml
+      - action: notify.mobile_app_REPLACE_WITH_YOUR_PHONE
+        data:
+          message: Someone is at the door
+          data:
+            image: /api/image_proxy/image.REPLACE_WITH_YOUR_ENTITY
+            actions:
+              - action: URI
+                title: Answer
+                uri: /lovelace/intercom?bticino_answer=camera.REPLACE_WITH_YOUR_CAMERA
+              - action: URI
+                title: Decline
+                uri: /lovelace/intercom?bticino_decline=camera.REPLACE_WITH_YOUR_CAMERA
+```
+
+Replace `/lovelace/intercom` with the path of your view. Both actions open the Home Assistant app:
+the call is answered or declined once the card has loaded, exactly as with its buttons. A link
+opened after the call stopped ringing (answered elsewhere, declined, timed out) does nothing. The
+parameter is removed from the address once read, so reloading the page does not act again.
 
 ## Ring clips
 
