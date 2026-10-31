@@ -42,6 +42,18 @@ FALLBACK_DEVICE_FOLDER = "companion"
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
 
+def _folder_name(text: str) -> str:
+    """A slug for a folder name, empty when nothing usable is left.
+
+    Home Assistant's slugify() returns "unknown" instead of an empty slug, which
+    would put every unnamed device or entrypoint in the same "unknown" folder.
+    """
+    name = slugify(text)
+    if name == "unknown" and slugify(f"x{text}") == "x":
+        return ""
+    return name
+
+
 @dataclass(frozen=True, slots=True)
 class ArchivedClip:
     """One clip in the archive."""
@@ -61,7 +73,7 @@ class RingClipArchiver:
         self._retention_days = int(entry.options.get(CONF_CLIP_RETENTION_DAYS, DEFAULT_CLIP_RETENTION_DAYS))
         media_root = hass.config.media_dirs.get("local")
         self._media_root = Path(media_root) if media_root else None
-        device_folder = slugify(device_id) or FALLBACK_DEVICE_FOLDER
+        device_folder = _folder_name(device_id) or FALLBACK_DEVICE_FOLDER
         self._root = self._media_root / CLIP_ARCHIVE_FOLDER / device_folder if self._media_root else None
         # The clip time each entrypoint was last found archived, so a state push
         # that changes nothing costs nothing.
@@ -116,7 +128,7 @@ class RingClipArchiver:
 
     def latest(self, entrypoint_id: str) -> datetime | None:
         """The time of the newest archived clip of an entrypoint."""
-        return self._latest.get(slugify(entrypoint_id))
+        return self._latest.get(_folder_name(entrypoint_id))
 
     async def async_list(self, entrypoint_id: str, limit: int) -> list[ArchivedClip]:
         """The newest clips of an entrypoint, newest first."""
@@ -137,7 +149,7 @@ class RingClipArchiver:
         """The folder of an entrypoint, never the device folder itself."""
         if self._root is None:
             return None
-        name = slugify(entrypoint_id)
+        name = _folder_name(entrypoint_id)
         return self._root / name if name else None
 
     @callback
