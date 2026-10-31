@@ -127,6 +127,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
     if (this._playing && (this._isRinging() || this._callState() === "active")) this._closePlayback();
     this._endPreviewIfRingOver();
     if (this._leftForElsewhere && this._callState() !== "active") this._leftForElsewhere = false;
+    this._followDeepLink();
     if (this._pc || this._connecting) {
       // The call was answered through the companion by another device: this
       // card steps aside. Closing with leave never ends the call, which the
@@ -181,8 +182,30 @@ class BTicinoGoIntercomCard extends HTMLElement {
     }
   }
 
+  // A notification action can open the dashboard on ?bticino_answer=<camera> or
+  // ?bticino_decline=<camera>: the card showing that camera answers or declines
+  // the ringing call, as its buttons would. The parameter is dropped once read,
+  // so a reload or going back does not act again, and one read when the call no
+  // longer rings does nothing.
+  _followDeepLink() {
+    if (!this.isConnected || !this._cameraState()) return;
+    const url = new URL(window.location.href);
+    const action = ["answer", "decline"].find((name) => url.searchParams.get(`bticino_${name}`) === this._config.camera);
+    if (!action) return;
+    url.searchParams.delete(`bticino_${action}`);
+    history.replaceState(history.state, "", url);
+    // The same rule as the buttons: a live view of this card hides both.
+    if (!this._canAnswer() || this._answering || ((this._pc || this._connecting) && !this._preview)) return;
+    // No ringing preview is opened next to the answer or the decline.
+    this._previewTried = true;
+    if (action === "answer") this._answer();
+    else this._hangup();
+  }
+
   connectedCallback() {
     window.addEventListener("keydown", this._onKeydown);
+    // The card may be attached after its first hass update.
+    if (this._hass) this._followDeepLink();
   }
 
   disconnectedCallback() {
