@@ -18,6 +18,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     """Register the card's signaling commands with Home Assistant authentication."""
     websocket_api.async_register_command(hass, _handle_offer)
     websocket_api.async_register_command(hass, _handle_candidate)
+    websocket_api.async_register_command(hass, _handle_candidates)
     websocket_api.async_register_command(hass, _handle_close)
     websocket_api.async_register_command(hass, _handle_unlock)
     websocket_api.async_register_command(hass, _handle_call_answer)
@@ -74,6 +75,32 @@ async def _handle_candidate(hass: HomeAssistant, connection, msg: dict[str, Any]
     except (CompanionApiError, HomeAssistantError, ValueError) as err:
         connection.send_error(msg["id"], "webrtc_candidate_failed", str(err))
         return
+    connection.send_result(msg["id"])
+
+
+@callback
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "bticino_companion/card_webrtc_candidates",
+        vol.Required("camera_entity_id"): str,
+        vol.Required("session_id"): str,
+    }
+)
+def _handle_candidates(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Subscribe the card to the local candidates of the session it is about to offer."""
+
+    @callback
+    def forward(candidate: dict[str, Any]) -> None:
+        connection.send_message(websocket_api.event_message(msg["id"], {"candidate": candidate}))
+
+    try:
+        unsubscribe = _camera_for_message(hass, msg).async_subscribe_card_webrtc_candidates(
+            str(msg["session_id"]).strip(), forward
+        )
+    except (HomeAssistantError, ValueError) as err:
+        connection.send_error(msg["id"], "webrtc_candidates_failed", str(err))
+        return
+    connection.subscriptions[msg["id"]] = unsubscribe
     connection.send_result(msg["id"])
 
 

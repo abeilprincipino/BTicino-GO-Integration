@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 import logging
 from dataclasses import dataclass, field
 from typing import Any
@@ -55,6 +56,12 @@ class _WebRTCSession:
     websocket: Any
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     closing: bool = False
+    # Set for a trickling session only. Companion can then send candidates at any
+    # moment, so one task reads the socket and hands responses to the request
+    # waiting in pending. Any other session reads its one response in the request.
+    on_candidate: Callable[[dict[str, Any]], None] | None = None
+    reader: asyncio.Task[None] | None = None
+    pending: asyncio.Future[Any] | None = None
 
 
 class CompanionApiClient:
@@ -164,8 +171,13 @@ class CompanionApiClient:
         session_id: str,
         origin: str,
         ice_servers: list[dict[str, Any]] | None = None,
+        on_candidate: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
-        """Open a session-scoped WebRTC signaling socket and submit its offer."""
+        """Open a session-scoped WebRTC signaling socket and submit its offer.
+
+        on_candidate asks Companion to trickle: the answer comes at once and each
+        local candidate is passed to on_candidate, possibly before the answer.
+        """
         if not self._access_token:
             raise CompanionAuthError("an access token is required")
         if session_id in self._webrtc_sessions:
@@ -175,20 +187,19 @@ class CompanionApiClient:
                 f"{self._base_url}{API_PATH_WEBRTC_WS}",
                 headers={"Authorization": f"Bearer {self._access_token}"},
             )
-            session = _WebRTCSession(websocket)
+            session = _WebRTCSession(websocket, on_candidate=on_candidate)
             self._webrtc_sessions[session_id] = session
-            response = await self._async_webrtc_message(
-                session,
-                "offer",
-                session_id,
-                {
-                    "session_id": session_id,
-                    "entrypoint_id": entrypoint_id,
-                    "origin": origin,
-                    "offer_sdp": offer_sdp,
-                    "ice_servers": ice_servers or [],
-                },
-            )
+            payload: dict[str, Any] = {
+                "session_id": session_id,
+                "entrypoint_id": entrypoint_id,
+                "origin": origin,
+                "offer_sdp": offer_sdp,
+                "ice_servers": ice_servers or [],
+            }
+            if on_candidate is not None:
+                payload["trickle"] = True
+                session.reader = asyncio.create_task(self._async_webrtc_read(session, session_id))
+            response = await self._async_webrtc_message(session, "offer", session_id, payload)
             return response
         except (ClientError, TimeoutError) as err:
             await self._async_webrtc_discard(session_id)
@@ -244,8 +255,12 @@ class CompanionApiClient:
                 return {"session_id": session_id, "ignored": True}
             if message_type == "close":
                 session.closing = True
-            await session.websocket.send_json({"type": message_type, "id": session_id, "payload": payload})
-            message = await session.websocket.receive()
+            request = {"type": message_type, "id": session_id, "payload": payload}
+            if session.reader is None:
+                await session.websocket.send_json(request)
+                message = await session.websocket.receive()
+            else:
+                message = await self._async_webrtc_exchange(session, request)
         if message.type is not WSMsgType.TEXT:
             raise CompanionApiError("Companion closed the WebRTC signaling socket")
         try:
@@ -267,9 +282,63 @@ class CompanionApiClient:
             return {"session_id": session_id}
         raise CompanionApiError("Companion returned an invalid WebRTC response")
 
+    @staticmethod
+    async def _async_webrtc_exchange(session: _WebRTCSession, request: dict[str, Any]) -> Any:
+        """Send a request of a trickling session and wait for its reader to get the response."""
+        if session.reader is None or session.reader.done():
+            raise CompanionApiError("Companion closed the WebRTC signaling socket")
+        session.pending = asyncio.get_running_loop().create_future()
+        try:
+            await session.websocket.send_json(request)
+            return await session.pending
+        finally:
+            session.pending = None
+
+    async def _async_webrtc_read(self, session: _WebRTCSession, session_id: str) -> None:
+        """Read a trickling session's socket until it closes or the session is discarded."""
+        try:
+            while True:
+                message = await session.websocket.receive()
+                if message.type is not WSMsgType.TEXT:
+                    return
+                if self._webrtc_deliver_candidate(session, session_id, message):
+                    continue
+                if session.pending is not None and not session.pending.done():
+                    session.pending.set_result(message)
+                else:
+                    _LOGGER.debug("Ignored an unexpected message on WebRTC session %s", session_id)
+        except (ClientError, TimeoutError, RuntimeError) as err:
+            _LOGGER.debug("WebRTC signaling socket of session %s failed: %s", session_id, err)
+        finally:
+            if session.pending is not None and not session.pending.done():
+                session.pending.set_exception(CompanionApiError("Companion closed the WebRTC signaling socket"))
+
+    @staticmethod
+    def _webrtc_deliver_candidate(session: _WebRTCSession, session_id: str, message: Any) -> bool:
+        """Pass on a local candidate; False when the message is not one."""
+        try:
+            data = message.json()
+        except ValueError:
+            return False
+        if not isinstance(data, dict) or data.get("type") != "candidate":
+            return False
+        payload = data.get("payload")
+        candidate = payload.get("candidate") if isinstance(payload, dict) else None
+        if data.get("id") != session_id or not isinstance(candidate, dict) or session.on_candidate is None:
+            _LOGGER.debug("Ignored an invalid ICE candidate on WebRTC session %s", session_id)
+            return True
+        try:
+            session.on_candidate(candidate)
+        except Exception:  # noqa: BLE001 - one listener must not end the signaling of the session
+            _LOGGER.exception("WebRTC candidate listener of session %s failed", session_id)
+        return True
+
     async def _async_webrtc_discard(self, session_id: str) -> None:
         session = self._webrtc_sessions.pop(session_id, None)
         if session is not None:
+            if session.reader is not None:
+                session.reader.cancel()
+                await asyncio.gather(session.reader, return_exceptions=True)
             await session.websocket.close()
 
     async def async_entrypoint_snapshot_latest(self, entrypoint_id: str) -> bytes | None:
