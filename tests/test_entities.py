@@ -7,7 +7,7 @@ import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from aiohttp import ClientError, WSMsgType
 
@@ -229,11 +229,64 @@ class TypedControlTest(unittest.IsolatedAsyncioTestCase):
         await camera.async_handle_async_webrtc_offer("offer-sdp", "session-1", send_message)
 
         entry.runtime_data.client.async_webrtc_offer.assert_awaited_once_with(
-            entrypoint_id="main", offer_sdp="offer-sdp", session_id="session-1", origin="native_camera", ice_servers=[]
+            entrypoint_id="main",
+            offer_sdp="offer-sdp",
+            session_id="session-1",
+            origin="native_camera",
+            ice_servers=[],
+            on_candidate=ANY,
         )
         self.assertEqual(send_message.call_args.args[0].answer, "answer-sdp")
         self.assertTrue(camera.available)
         self.assertTrue(camera.force_update)
+
+    async def test_camera_sends_candidates_to_the_frontend_after_the_answer(self) -> None:
+        entry = _MockEntry()
+        stream = Entrypoint.from_dict(
+            {"id": "main", "label": "Main", "capabilities": {"stream": True}, "availability": {"stream": True}}
+        )
+        camera = CompanionEntrypointCamera(entry, _coordinator(_state(entrypoints=(stream,))), entry.runtime_data.client, "main", "Main")
+        early = {"candidate": "candidate:early", "sdpMid": "0", "sdpMLineIndex": 0}
+
+        async def offer(**kwargs):
+            kwargs["on_candidate"](early)
+            kwargs["on_candidate"]({"candidate": ""})
+            camera.on_candidate = kwargs["on_candidate"]
+            return {"answer_sdp": "answer-sdp"}
+
+        entry.runtime_data.client.async_webrtc_offer = AsyncMock(side_effect=offer)
+        send_message = MagicMock()
+
+        await camera.async_handle_async_webrtc_offer("offer-sdp", "session-1", send_message)
+        camera.on_candidate({"candidate": "candidate:late", "sdpMid": "0", "sdpMLineIndex": 0})
+
+        sent = [call.args[0] for call in send_message.call_args_list]
+        self.assertEqual(sent[0].answer, "answer-sdp")
+        self.assertEqual([message.candidate.candidate for message in sent[1:]], ["candidate:early", "candidate:late"])
+
+    async def test_card_gets_trickle_only_when_subscribed(self) -> None:
+        entry = _MockEntry()
+        stream = Entrypoint.from_dict(
+            {"id": "main", "label": "Main", "capabilities": {"stream": True}, "availability": {"stream": True}}
+        )
+        camera = CompanionEntrypointCamera(entry, _coordinator(_state(entrypoints=(stream,))), entry.runtime_data.client, "main", "Main")
+        client = entry.runtime_data.client
+
+        await camera.async_handle_card_webrtc_offer("offer-sdp", "old-card")
+        self.assertNotIn("on_candidate", client.async_webrtc_offer.await_args.kwargs)
+
+        received: list[dict] = []
+        unsubscribe = camera.async_subscribe_card_webrtc_candidates("new-card", received.append)
+        await camera.async_handle_card_webrtc_offer("offer-sdp", "new-card")
+        on_candidate = client.async_webrtc_offer.await_args.kwargs["on_candidate"]
+
+        on_candidate({"candidate": "one"})
+        unsubscribe()
+        on_candidate({"candidate": "two"})
+
+        self.assertEqual(received, [{"candidate": "one"}])
+        with self.assertRaisesRegex(ValueError, "cannot be subscribed"):
+            camera.async_subscribe_card_webrtc_candidates("old-card", received.append)
 
     async def test_camera_card_bridge_owns_and_releases_its_session(self) -> None:
         entry = _MockEntry()

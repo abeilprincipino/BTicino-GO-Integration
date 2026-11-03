@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timedelta
 import logging
 from pathlib import Path
 from typing import Any
 
-from homeassistant.components.camera import Camera, CameraEntityFeature, WebRTCAnswer, WebRTCError, WebRTCSendMessage
+from homeassistant.components.camera import (
+    Camera,
+    CameraEntityFeature,
+    WebRTCAnswer,
+    WebRTCCandidate,
+    WebRTCError,
+    WebRTCSendMessage,
+)
 from homeassistant.components.http.auth import async_sign_path
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -58,6 +66,7 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
         self._attr_name = name
         self._attr_unique_id = f"{entry.unique_id}_camera_{entrypoint_id}"
         self._active_webrtc_sessions: set[str] = set()
+        self._webrtc_candidate_listeners: dict[str, Callable[[dict[str, Any]], None]] = {}
 
     @property
     def device_info(self):
@@ -155,8 +164,20 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
         self, offer_sdp: str, session_id: str, send_message: WebRTCSendMessage
     ) -> None:
         """Send Home Assistant's offer to Companion and return its SDP answer."""
+        # Companion can send a candidate before its answer: it waits for the answer.
+        early: list[WebRTCCandidate] | None = []
+
+        def on_candidate(payload: dict[str, Any]) -> None:
+            candidate = _candidate_from_payload(payload)
+            if candidate is None:
+                return
+            if early is None:
+                send_message(WebRTCCandidate(candidate))
+            else:
+                early.append(WebRTCCandidate(candidate))
+
         try:
-            answer_sdp = await self._async_open_webrtc_session(offer_sdp, session_id, "native_camera")
+            answer_sdp = await self._async_open_webrtc_session(offer_sdp, session_id, "native_camera", on_candidate)
         except CompanionApiError as err:
             send_message(WebRTCError("webrtc_offer_failed", str(err)))
             return
@@ -164,12 +185,48 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
             send_message(WebRTCError("webrtc_offer_failed", str(err)))
             return
         send_message(WebRTCAnswer(answer_sdp))
+        waiting, early = early, None
+        for message in waiting:
+            send_message(message)
 
     async def async_handle_card_webrtc_offer(self, offer_sdp: str, session_id: str) -> str:
-        """Create a session for the bundled card through this camera authority."""
-        return await self._async_open_webrtc_session(offer_sdp, session_id, "bticino_card")
+        """Create a session for the bundled card through this camera authority.
 
-    async def _async_open_webrtc_session(self, offer_sdp: str, session_id: str, origin: str) -> str:
+        Companion trickles only to a card subscribed to the candidates. A card
+        loaded from an older version gets them all inside the answer, as it expects.
+        """
+        on_candidate = None
+        if session_id in self._webrtc_candidate_listeners:
+
+            def on_candidate(payload: dict[str, Any]) -> None:
+                listener = self._webrtc_candidate_listeners.get(session_id)
+                if listener is not None:
+                    listener(payload)
+
+        return await self._async_open_webrtc_session(offer_sdp, session_id, "bticino_card", on_candidate)
+
+    @callback
+    def async_subscribe_card_webrtc_candidates(
+        self, session_id: str, listener: Callable[[dict[str, Any]], None]
+    ) -> Callable[[], None]:
+        """Pass on the local candidates of a card session that is about to make its offer."""
+        if session_id in self._webrtc_candidate_listeners or session_id in self._active_webrtc_sessions:
+            raise ValueError("This WebRTC session cannot be subscribed to")
+        self._webrtc_candidate_listeners[session_id] = listener
+
+        @callback
+        def unsubscribe() -> None:
+            self._webrtc_candidate_listeners.pop(session_id, None)
+
+        return unsubscribe
+
+    async def _async_open_webrtc_session(
+        self,
+        offer_sdp: str,
+        session_id: str,
+        origin: str,
+        on_candidate: Callable[[dict[str, Any]], None] | None = None,
+    ) -> str:
         """Open a server-auditable session owned by this camera."""
         self._active_webrtc_sessions.add(session_id)
         try:
@@ -179,6 +236,7 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
                 session_id=session_id,
                 origin=origin,
                 ice_servers=await self._async_ice_servers(),
+                **({"on_candidate": on_candidate} if on_candidate is not None else {}),
             )
         except CompanionApiError:
             self._active_webrtc_sessions.discard(session_id)
@@ -304,6 +362,23 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
         except CompanionApiError as err:
             _LOGGER.debug("Unable to fetch snapshot for %s: %s", self._entrypoint_id, err)
             return None
+
+
+def _candidate_from_payload(payload: dict[str, Any]) -> RTCIceCandidateInit | None:
+    """Read a local candidate sent by Companion; None when it is unusable."""
+    candidate = payload.get("candidate")
+    if not isinstance(candidate, str) or not candidate.strip():
+        return None
+    try:
+        return RTCIceCandidateInit(
+            candidate,
+            sdp_mid=payload.get("sdpMid"),
+            sdp_m_line_index=payload.get("sdpMLineIndex"),
+            user_fragment=payload.get("usernameFragment"),
+        )
+    except ValueError:
+        _LOGGER.debug("Ignored an invalid ICE candidate from Companion: %s", payload)
+        return None
 
 
 def _candidate_to_payload(candidate: RTCIceCandidateInit) -> dict[str, Any]:
