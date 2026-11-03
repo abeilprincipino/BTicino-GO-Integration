@@ -76,6 +76,8 @@ class BTicinoGoIntercomCard extends HTMLElement {
     // The companion's candidates that came before its answer could be applied.
     this._remoteCandidates = [];
     this._unsubscribeCandidates = undefined;
+    // Whether this session has been up: before that it is connecting, not reconnecting.
+    this._everConnected = false;
     this._audioSender = undefined;
     // Settles with the preview's audio sender (undefined if the session ends first),
     // so an answer given while still connecting can wait for it.
@@ -569,6 +571,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
       };
       pc.onconnectionstatechange = () => {
         this._connected = pc.connectionState === "connected";
+        if (this._connected) this._everConnected = true;
         if (this._connected && this._micTrack) this._micTrack.enabled = !this._muted;
         if (["failed", "closed"].includes(pc.connectionState) && this._pc === pc) {
           this._error = this._preview ? "" : "WebRTC connection was lost.";
@@ -776,6 +779,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
     this._remoteCandidates = [];
     if (this._unsubscribeCandidates) this._releaseCandidates(this._unsubscribeCandidates);
     this._unsubscribeCandidates = undefined;
+    this._everConnected = false;
     this._connected = false;
     this._connecting = false;
     this._muted = false;
@@ -853,7 +857,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
         : this._connected
           ? [this._muted ? "Muted" : "Connected", "active"]
           : this._pc
-            ? ["Reconnecting", "connecting"]
+            ? [this._everConnected ? "Reconnecting" : "Connecting", "connecting"]
           : ringing
           ? ["Ringing", "ringing"]
           : remoteActive
