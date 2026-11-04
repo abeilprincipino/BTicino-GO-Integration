@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import asyncio
 from datetime import datetime, timezone
+from importlib import import_module
 from pathlib import Path
 import unittest
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
@@ -76,6 +77,15 @@ class _SerializedWebSocket:
 
     async def close(self) -> None:
         return None
+
+
+def _patch_image_http_client():
+    """Patch the HTTP client of ImageEntity, whose module moved in Home Assistant 2026.11."""
+    try:
+        import_module("homeassistant.components.image.entity")
+    except ImportError:
+        return patch("homeassistant.components.image.get_async_client")
+    return patch("homeassistant.components.image.entity.get_async_client")
 
 
 def _coordinator(state: CompanionState | None = None, connected: bool = True) -> MagicMock:
@@ -449,7 +459,7 @@ class TypedControlTest(unittest.IsolatedAsyncioTestCase):
 
 class RingSnapshotImageTest(unittest.IsolatedAsyncioTestCase):
     def _image(self, entry, entrypoint) -> CompanionRingSnapshotImage:
-        with patch("homeassistant.components.image.get_async_client"):
+        with _patch_image_http_client():
             return CompanionRingSnapshotImage(
                 MagicMock(), entry, _coordinator(_state(entrypoints=(entrypoint,))), entry.runtime_data.client, "main", "Main"
             )
@@ -632,7 +642,7 @@ class DynamicEntityManagerTest(unittest.IsolatedAsyncioTestCase):
         manager = DynamicEntityManager(MagicMock(), entry, entry.runtime_data.coordinator, entry.runtime_data.client)
         platform = _MockPlatform()
 
-        with patch("homeassistant.components.image.get_async_client"):
+        with _patch_image_http_client():
             await manager.async_register_platform("image", platform)
 
         self.assertEqual([entity.unique_id for entity in platform.added], ["device-123_ring_snapshot_main"])
