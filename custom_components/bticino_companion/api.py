@@ -60,6 +60,7 @@ class _WebRTCSession:
     # moment, so one task reads the socket and hands responses to the request
     # waiting in pending. Any other session reads its one response in the request.
     on_candidate: Callable[[dict[str, Any]], None] | None = None
+    on_source_failed: Callable[[str], None] | None = None
     reader: asyncio.Task[None] | None = None
     pending: asyncio.Future[Any] | None = None
 
@@ -172,11 +173,14 @@ class CompanionApiClient:
         origin: str,
         ice_servers: list[dict[str, Any]] | None = None,
         on_candidate: Callable[[dict[str, Any]], None] | None = None,
+        on_source_failed: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         """Open a session-scoped WebRTC signaling socket and submit its offer.
 
-        on_candidate asks Companion to trickle: the answer comes at once and each
-        local candidate is passed to on_candidate, possibly before the answer.
+        on_candidate asks Companion to trickle: the answer comes at once, before the
+        stream starts, and each local candidate is passed to on_candidate, possibly
+        before the answer. on_source_failed gets the reason if the stream then does
+        not start.
         """
         if not self._access_token:
             raise CompanionAuthError("an access token is required")
@@ -187,7 +191,7 @@ class CompanionApiClient:
                 f"{self._base_url}{API_PATH_WEBRTC_WS}",
                 headers={"Authorization": f"Bearer {self._access_token}"},
             )
-            session = _WebRTCSession(websocket, on_candidate=on_candidate)
+            session = _WebRTCSession(websocket, on_candidate=on_candidate, on_source_failed=on_source_failed)
             self._webrtc_sessions[session_id] = session
             payload: dict[str, Any] = {
                 "session_id": session_id,
@@ -303,6 +307,8 @@ class CompanionApiClient:
                     return
                 if self._webrtc_deliver_candidate(session, session_id, message):
                     continue
+                if self._webrtc_deliver_source_failure(session, session_id, message):
+                    continue
                 if session.pending is not None and not session.pending.done():
                     session.pending.set_result(message)
                 else:
@@ -331,6 +337,26 @@ class CompanionApiClient:
             session.on_candidate(candidate)
         except Exception:  # noqa: BLE001 - one listener must not end the signaling of the session
             _LOGGER.exception("WebRTC candidate listener of session %s failed", session_id)
+        return True
+
+    @staticmethod
+    def _webrtc_deliver_source_failure(session: _WebRTCSession, session_id: str, message: Any) -> bool:
+        """Pass on that the stream did not start; False when the message does not say so."""
+        try:
+            data = message.json()
+        except ValueError:
+            return False
+        if not isinstance(data, dict) or data.get("type") != "source_failed":
+            return False
+        if data.get("id") != session_id or session.on_source_failed is None:
+            _LOGGER.debug("Ignored a source failure on WebRTC session %s", session_id)
+            return True
+        payload = data.get("payload")
+        reason = payload.get("message") if isinstance(payload, dict) else None
+        try:
+            session.on_source_failed(str(reason or "The intercom stream did not start"))
+        except Exception:  # noqa: BLE001 - one listener must not end the signaling of the session
+            _LOGGER.exception("WebRTC source failure listener of session %s failed", session_id)
         return True
 
     async def _async_webrtc_discard(self, session_id: str) -> None:

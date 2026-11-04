@@ -93,9 +93,13 @@ def _handle_candidates(hass: HomeAssistant, connection, msg: dict[str, Any]) -> 
     def forward(candidate: dict[str, Any]) -> None:
         connection.send_message(websocket_api.event_message(msg["id"], {"candidate": candidate}))
 
+    @callback
+    def forward_source_failure(reason: str) -> None:
+        connection.send_message(websocket_api.event_message(msg["id"], {"source_failed": reason}))
+
     try:
         unsubscribe = _camera_for_message(hass, msg).async_subscribe_card_webrtc_candidates(
-            str(msg["session_id"]).strip(), forward
+            str(msg["session_id"]).strip(), forward, on_source_failed=forward_source_failure
         )
     except (HomeAssistantError, ValueError) as err:
         connection.send_error(msg["id"], "webrtc_candidates_failed", str(err))
