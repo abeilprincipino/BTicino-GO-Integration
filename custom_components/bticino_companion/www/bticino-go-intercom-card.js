@@ -73,6 +73,11 @@ class BTicinoGoIntercomCard extends HTMLElement {
     // microphone transceiver negotiated but empty until the answer.
     this._preview = false;
     this._previewTried = false;
+    // The companion's candidates that came before its answer could be applied.
+    this._remoteCandidates = [];
+    this._unsubscribeCandidates = undefined;
+    // Whether this session has been up: before that it is connecting, not reconnecting.
+    this._everConnected = false;
     this._audioSender = undefined;
     // Settles with the preview's audio sender (undefined if the session ends first),
     // so an answer given while still connecting can wait for it.
@@ -462,6 +467,39 @@ class BTicinoGoIntercomCard extends HTMLElement {
     return `bticino-card-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   }
 
+  // Subscribes before the offer, so that no candidate of the companion is missed.
+  // A backend without the command just answers with the candidates in the SDP.
+  async _subscribeRemoteCandidates(sessionId, pc) {
+    let unsubscribe;
+    try {
+      unsubscribe = await this._hass.connection.subscribeMessage(({ candidate }) => {
+        if (this._sessionId !== sessionId || !candidate) return;
+        if (pc.remoteDescription) this._addRemoteCandidate(pc, candidate);
+        else this._remoteCandidates.push(candidate);
+      }, {
+        type: "bticino_companion/card_webrtc_candidates",
+        camera_entity_id: this._config.camera,
+        session_id: sessionId,
+      });
+    } catch (err) {
+      console.debug("bticino-go-intercom-card: no candidate subscription", err);
+      return;
+    }
+    if (this._sessionId === sessionId) this._unsubscribeCandidates = unsubscribe;
+    else this._releaseCandidates(unsubscribe);
+  }
+
+  _addRemoteCandidate(pc, candidate) {
+    pc.addIceCandidate(candidate).catch((err) => {
+      console.warn("bticino-go-intercom-card: failed to add ICE candidate", err);
+    });
+  }
+
+  // The connection may be gone by now, and the rejection says nothing useful.
+  _releaseCandidates(unsubscribe) {
+    Promise.resolve().then(unsubscribe).catch(() => {});
+  }
+
   _sendCandidate(candidate) {
     if (!this._sessionId) return Promise.resolve();
     return this._send("bticino_companion/card_webrtc_candidate", {
@@ -533,6 +571,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
       };
       pc.onconnectionstatechange = () => {
         this._connected = pc.connectionState === "connected";
+        if (this._connected) this._everConnected = true;
         if (this._connected && this._micTrack) this._micTrack.enabled = !this._muted;
         if (["failed", "closed"].includes(pc.connectionState) && this._pc === pc) {
           this._error = this._preview ? "" : "WebRTC connection was lost.";
@@ -559,6 +598,8 @@ class BTicinoGoIntercomCard extends HTMLElement {
         await beforeOffer;
         if (this._sessionId !== sessionId) return;
       }
+      await this._subscribeRemoteCandidates(sessionId, pc);
+      if (this._sessionId !== sessionId) return;
       const response = await this._send("bticino_companion/card_webrtc_offer", {
         session_id: sessionId,
         offer_sdp: pc.localDescription.sdp,
@@ -568,6 +609,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
       this._offerAccepted = true;
       await pc.setRemoteDescription({ type: "answer", sdp: response.answer_sdp });
       if (this._sessionId !== sessionId) return;
+      this._remoteCandidates.splice(0).forEach((candidate) => this._addRemoteCandidate(pc, candidate));
       await Promise.all(this._queuedCandidates.splice(0).map((candidate) => this._sendCandidate(candidate)));
       if (this._sessionId !== sessionId) return;
       this._attachVideo();
@@ -734,6 +776,10 @@ class BTicinoGoIntercomCard extends HTMLElement {
     this._sessionId = undefined;
     this._offerAccepted = false;
     this._queuedCandidates = [];
+    this._remoteCandidates = [];
+    if (this._unsubscribeCandidates) this._releaseCandidates(this._unsubscribeCandidates);
+    this._unsubscribeCandidates = undefined;
+    this._everConnected = false;
     this._connected = false;
     this._connecting = false;
     this._muted = false;
@@ -811,7 +857,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
         : this._connected
           ? [this._muted ? "Muted" : "Connected", "active"]
           : this._pc
-            ? ["Reconnecting", "connecting"]
+            ? [this._everConnected ? "Reconnecting" : "Connecting", "connecting"]
           : ringing
           ? ["Ringing", "ringing"]
           : remoteActive
