@@ -235,6 +235,7 @@ class TypedControlTest(unittest.IsolatedAsyncioTestCase):
             origin="native_camera",
             ice_servers=[],
             on_candidate=ANY,
+            on_source_failed=ANY,
         )
         self.assertEqual(send_message.call_args.args[0].answer, "answer-sdp")
         self.assertTrue(camera.available)
@@ -274,6 +275,7 @@ class TypedControlTest(unittest.IsolatedAsyncioTestCase):
 
         await camera.async_handle_card_webrtc_offer("offer-sdp", "old-card")
         self.assertNotIn("on_candidate", client.async_webrtc_offer.await_args.kwargs)
+        self.assertNotIn("on_source_failed", client.async_webrtc_offer.await_args.kwargs)
 
         received: list[dict] = []
         unsubscribe = camera.async_subscribe_card_webrtc_candidates("new-card", received.append)
@@ -287,6 +289,47 @@ class TypedControlTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(received, [{"candidate": "one"}])
         with self.assertRaisesRegex(ValueError, "cannot be subscribed"):
             camera.async_subscribe_card_webrtc_candidates("old-card", received.append)
+
+    def _trickle_camera(self) -> tuple[Any, Any]:
+        entry = _MockEntry()
+        stream = Entrypoint.from_dict(
+            {"id": "main", "label": "Main", "capabilities": {"stream": True}, "availability": {"stream": True}}
+        )
+        camera = CompanionEntrypointCamera(entry, _coordinator(_state(entrypoints=(stream,))), entry.runtime_data.client, "main", "Main")
+        return camera, entry.runtime_data.client
+
+    async def test_camera_tells_the_card_a_source_failure(self) -> None:
+        camera, client = self._trickle_camera()
+        client.async_webrtc_offer = AsyncMock(return_value={"answer_sdp": "answer-sdp"})
+
+        failures: list[str] = []
+        unsubscribe = camera.async_subscribe_card_webrtc_candidates("card", MagicMock(), on_source_failed=failures.append)
+        await camera.async_handle_card_webrtc_offer("offer-sdp", "card")
+        on_source_failed = client.async_webrtc_offer.await_args.kwargs["on_source_failed"]
+
+        on_source_failed("one")
+        unsubscribe()
+        on_source_failed("two")
+
+        self.assertEqual(failures, ["one"])
+
+    async def test_native_camera_sends_a_source_failure_after_the_answer(self) -> None:
+        camera, client = self._trickle_camera()
+
+        async def offer(**kwargs):
+            kwargs["on_source_failed"]("early")
+            camera.on_source_failed = kwargs["on_source_failed"]
+            return {"answer_sdp": "answer-sdp"}
+
+        client.async_webrtc_offer = AsyncMock(side_effect=offer)
+        send_message = MagicMock()
+
+        await camera.async_handle_async_webrtc_offer("offer-sdp", "session-1", send_message)
+        camera.on_source_failed("late")
+
+        sent = [call.args[0] for call in send_message.call_args_list]
+        self.assertEqual(sent[0].answer, "answer-sdp")
+        self.assertEqual([(item.code, item.message) for item in sent[1:]], [("webrtc_source_failed", "early"), ("webrtc_source_failed", "late")])
 
     async def test_camera_card_bridge_owns_and_releases_its_session(self) -> None:
         entry = _MockEntry()
