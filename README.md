@@ -315,6 +315,9 @@ Pick one of these paths:
 
 If a path works or fails for you, please say so in an issue, with your network setup.
 
+Home Assistant Cloud carries the video through its TURN relay, not through its remote UI: Home
+Assistant passes the relay to the companion with every call, so there is nothing to configure.
+
 ### VPN to your home network
 
 With a VPN the phone is on your home network, so it reaches the intercom on UDP `8555` exactly as
@@ -356,8 +359,9 @@ with one of the paths above.
 
 ### Is my home line behind CGNAT?
 
-Compare the WAN (internet) IP shown in your router's status page with the address shown by a
-"what is my IP" website, from a device at home. If they are the same, your line has a public IP.
+Compare the WAN (internet) IPv4 address shown in your router's status page with the IPv4 address
+shown by a "what is my IP" website, from a device at home. Many of those sites show your IPv6
+address first: compare the IPv4 one. If they are the same, your line has a public IP.
 If they differ, your router is not directly on the internet:
 
 - a WAN IP from `100.64.` to `100.127.` means CGNAT: your provider shares one public IP among
