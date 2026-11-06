@@ -431,3 +431,5 @@ Pull requests target the `develop` branch; betas are published from `develop` be
 This integration is developed together with
 [BTicino GO Companion](https://github.com/abeilprincipino/BTicino-GO-Companion), since most features
 consume companion API capabilities directly.
+
+Originally started by [r0bb10](https://github.com/r0bb10).
