@@ -67,6 +67,7 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
         self._attr_unique_id = f"{entry.unique_id}_camera_{entrypoint_id}"
         self._active_webrtc_sessions: set[str] = set()
         self._webrtc_candidate_listeners: dict[str, Callable[[dict[str, Any]], None]] = {}
+        self._webrtc_source_failed_listeners: dict[str, Callable[[str], None]] = {}
 
     @property
     def device_info(self):
@@ -164,8 +165,8 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
         self, offer_sdp: str, session_id: str, send_message: WebRTCSendMessage
     ) -> None:
         """Send Home Assistant's offer to Companion and return its SDP answer."""
-        # Companion can send a candidate before its answer: it waits for the answer.
-        early: list[WebRTCCandidate] | None = []
+        # Companion can send a candidate or a failure before its answer: they wait for it.
+        early: list[WebRTCCandidate | WebRTCError] | None = []
 
         def on_candidate(payload: dict[str, Any]) -> None:
             candidate = _candidate_from_payload(payload)
@@ -176,8 +177,17 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
             else:
                 early.append(WebRTCCandidate(candidate))
 
+        def on_source_failed(reason: str) -> None:
+            error = WebRTCError("webrtc_source_failed", reason)
+            if early is None:
+                send_message(error)
+            else:
+                early.append(error)
+
         try:
-            answer_sdp = await self._async_open_webrtc_session(offer_sdp, session_id, "native_camera", on_candidate)
+            answer_sdp = await self._async_open_webrtc_session(
+                offer_sdp, session_id, "native_camera", on_candidate, on_source_failed
+            )
         except CompanionApiError as err:
             send_message(WebRTCError("webrtc_offer_failed", str(err)))
             return
@@ -196,6 +206,7 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
         loaded from an older version gets them all inside the answer, as it expects.
         """
         on_candidate = None
+        on_source_failed = None
         if session_id in self._webrtc_candidate_listeners:
 
             def on_candidate(payload: dict[str, Any]) -> None:
@@ -203,20 +214,32 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
                 if listener is not None:
                     listener(payload)
 
-        return await self._async_open_webrtc_session(offer_sdp, session_id, "bticino_card", on_candidate)
+            def on_source_failed(reason: str) -> None:
+                listener = self._webrtc_source_failed_listeners.get(session_id)
+                if listener is not None:
+                    listener(reason)
+
+        return await self._async_open_webrtc_session(offer_sdp, session_id, "bticino_card", on_candidate, on_source_failed)
 
     @callback
     def async_subscribe_card_webrtc_candidates(
-        self, session_id: str, listener: Callable[[dict[str, Any]], None]
+        self,
+        session_id: str,
+        listener: Callable[[dict[str, Any]], None],
+        *,
+        on_source_failed: Callable[[str], None] | None = None,
     ) -> Callable[[], None]:
-        """Pass on the local candidates of a card session that is about to make its offer."""
+        """Pass on the local candidates of a card session about to make its offer, and a late failure."""
         if session_id in self._webrtc_candidate_listeners or session_id in self._active_webrtc_sessions:
             raise ValueError("This WebRTC session cannot be subscribed to")
         self._webrtc_candidate_listeners[session_id] = listener
+        if on_source_failed is not None:
+            self._webrtc_source_failed_listeners[session_id] = on_source_failed
 
         @callback
         def unsubscribe() -> None:
             self._webrtc_candidate_listeners.pop(session_id, None)
+            self._webrtc_source_failed_listeners.pop(session_id, None)
 
         return unsubscribe
 
@@ -226,6 +249,7 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
         session_id: str,
         origin: str,
         on_candidate: Callable[[dict[str, Any]], None] | None = None,
+        on_source_failed: Callable[[str], None] | None = None,
     ) -> str:
         """Open a server-auditable session owned by this camera."""
         self._active_webrtc_sessions.add(session_id)
@@ -236,7 +260,7 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
                 session_id=session_id,
                 origin=origin,
                 ice_servers=await self._async_ice_servers(),
-                **({"on_candidate": on_candidate} if on_candidate is not None else {}),
+                **({"on_candidate": on_candidate, "on_source_failed": on_source_failed} if on_candidate is not None else {}),
             )
         except CompanionApiError:
             self._active_webrtc_sessions.discard(session_id)

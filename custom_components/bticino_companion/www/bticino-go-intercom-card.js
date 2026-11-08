@@ -65,6 +65,8 @@ class BTicinoGoIntercomCard extends HTMLElement {
     this._offerAccepted = false;
     this._connecting = false;
     this._connected = false;
+    // The first frame came. The connection is up seconds before it.
+    this._videoFlowing = false;
     this._muted = false;
     this._error = "";
     this._elsewhereUntil = 0;
@@ -472,8 +474,13 @@ class BTicinoGoIntercomCard extends HTMLElement {
   async _subscribeRemoteCandidates(sessionId, pc) {
     let unsubscribe;
     try {
-      unsubscribe = await this._hass.connection.subscribeMessage(({ candidate }) => {
-        if (this._sessionId !== sessionId || !candidate) return;
+      unsubscribe = await this._hass.connection.subscribeMessage(({ candidate, source_failed: sourceFailed }) => {
+        if (this._sessionId !== sessionId) return;
+        if (sourceFailed) {
+          this._sourceFailed(sourceFailed);
+          return;
+        }
+        if (!candidate) return;
         if (pc.remoteDescription) this._addRemoteCandidate(pc, candidate);
         else this._remoteCandidates.push(candidate);
       }, {
@@ -487,6 +494,24 @@ class BTicinoGoIntercomCard extends HTMLElement {
     }
     if (this._sessionId === sessionId) this._unsubscribeCandidates = unsubscribe;
     else this._releaseCandidates(unsubscribe);
+  }
+
+  // The answer comes before the stream: the connection is up long before the first
+  // frame, and when the intercom fails to start only this message says so.
+  _sourceFailed(reason) {
+    this._error = this._preview ? "" : reason;
+    this._end();
+  }
+
+  // A received track stays muted until its first packet, so this is the first frame.
+  _watchVideo(track, sessionId) {
+    const flowing = () => {
+      if (this._sessionId !== sessionId || this._videoFlowing) return;
+      this._videoFlowing = true;
+      this._render();
+    };
+    if (track.muted) track.addEventListener("unmute", flowing, { once: true });
+    else flowing();
   }
 
   _addRemoteCandidate(pc, candidate) {
@@ -557,6 +582,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
             this._remoteStream.addTrack(track);
           }
         }
+        if (event.track.kind === "video") this._watchVideo(event.track, sessionId);
         this._attachVideo();
       };
       pc.onicecandidate = ({ candidate }) => {
@@ -780,6 +806,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
     if (this._unsubscribeCandidates) this._releaseCandidates(this._unsubscribeCandidates);
     this._unsubscribeCandidates = undefined;
     this._everConnected = false;
+    this._videoFlowing = false;
     this._connected = false;
     this._connecting = false;
     this._muted = false;
@@ -854,10 +881,10 @@ class BTicinoGoIntercomCard extends HTMLElement {
       ? ["Ringing", "ringing"]
       : this._connecting
       ? ["Connecting", "connecting"]
-        : this._connected
+        : this._connected && this._videoFlowing
           ? [this._muted ? "Muted" : "Connected", "active"]
           : this._pc
-            ? [this._everConnected ? "Reconnecting" : "Connecting", "connecting"]
+            ? [this._everConnected && this._videoFlowing ? "Reconnecting" : "Connecting", "connecting"]
           : ringing
           ? ["Ringing", "ringing"]
           : remoteActive
@@ -869,7 +896,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
     root.querySelector(".live").innerHTML = `
         <img class="${active || !snapshot ? "hidden" : ""}" src="${this._escape(snapshot)}" alt="${this._escape(name)}" />
         <div class="placeholder ${active || snapshot ? "hidden" : ""}">No snapshot available</div>
-        <video class="${this._connected ? "" : "hidden"}" playsinline autoplay></video>
+        <video class="${this._connected && this._videoFlowing ? "" : "hidden"}" playsinline autoplay></video>
         <div class="ring-overlay ${ringing && !active ? "" : "hidden"}"><div class="ring-pulse"></div><div class="ring-label">${this._escape(entrypoint)}</div><div>Incoming call</div></div>`;
     root.querySelector(".bottom").innerHTML = `<div class="controls">
         <button class="call ${(active && !this._preview) || (ringing && !canAnswer) || (this._leftForElsewhere && inCall) ? "hidden" : ""}" title="${canAnswer ? "Answer" : "Start live view"}"><ha-icon icon="mdi:phone"></ha-icon></button>

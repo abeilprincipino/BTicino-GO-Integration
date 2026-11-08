@@ -24,6 +24,7 @@ answer, talk, hang up, and unlock from a dashboard.
 - [Ring clips](#ring-clips)
 - [Entities](#entities)
 - [Updating](#updating)
+- [Remote access to the video](#remote-access-to-the-video)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
 
@@ -297,6 +298,78 @@ After an update, reload the dashboard (or clear the browser cache) so the browse
 The companion itself is updated separately, from its `Companion Firmware` update entity or by running
 its installer again.
 
+## Remote access to the video
+
+Home Assistant remote access (Home Assistant Cloud, a reverse proxy, a Cloudflare Tunnel with a
+public hostname) carries the dashboard and the call signaling, not the video. The video is a
+WebRTC stream between your phone and the intercom: away from home, if the card rings or the
+intercom clicks but the picture stays black, the stream has no path between the two.
+
+Pick one of these paths:
+
+| Path | What you need | Works when your home line is behind CGNAT | Verified with this integration |
+| --- | --- | --- | --- |
+| [VPN to your home network](#vpn-to-your-home-network) | A VPN app active on the phone | Tailscale: yes. WireGuard: only with a reachable endpoint | Not yet |
+| [TURN server](#turn-server) | A TURN server you run or rent | Yes | Not yet |
+| Home Assistant Cloud | A Home Assistant Cloud subscription | Yes | Not yet |
+
+If a path works or fails for you, please say so in an issue, with your network setup.
+
+Home Assistant Cloud carries the video through its TURN relay, not through its remote UI: Home
+Assistant passes the relay to the companion with every call, so there is nothing to configure.
+
+### VPN to your home network
+
+With a VPN the phone is on your home network, so it reaches the intercom on UDP `8555` exactly as
+at home.
+
+- **Tailscale:** run Tailscale on a machine in your home network (for example the Home Assistant
+  Tailscale add-on) as a subnet router for the intercom's subnet, approve the route in the
+  Tailscale admin console, and keep Tailscale on in the phone. It also works when your home line
+  has no public IP.
+- **WireGuard:** the phone's tunnel must route the intercom's subnet (`AllowedIPs`), and the
+  WireGuard server at home needs a reachable UDP port, so a public IP or a forward on your router.
+
+### TURN server
+
+A TURN server relays the stream when no direct path exists. Add it to Home Assistant's
+`configuration.yaml`; the integration passes Home Assistant's ICE servers to the companion with
+every call:
+
+```yaml
+web_rtc:
+  ice_servers:
+    - url: "turn:turn.example.com:3478"
+      username: "user"
+      credential: "secret"
+```
+
+- Run your own (for example coturn on a small VPS) or use a hosted TURN service.
+- The relay carries the whole stream, so count its traffic against your server's or provider's
+  allowance.
+- The browser receives these credentials to open the stream, so any Home Assistant user who opens
+  the card can read them. Use credentials dedicated to this purpose.
+
+### Cloudflare Tunnel and other reverse proxies
+
+A Cloudflare Tunnel with a public hostname (the `cloudflared` add-on or container) and reverse
+proxies such as Nginx or Traefik carry HTTP and WebSocket only. They make Home Assistant reachable,
+which the video still needs for signaling, but they do not carry the video itself: combine them
+with one of the paths above.
+
+### Is my home line behind CGNAT?
+
+Compare the WAN (internet) IPv4 address shown in your router's status page with the IPv4 address
+shown by a "what is my IP" website, from a device at home. Many of those sites show your IPv6
+address first: compare the IPv4 one. If they are the same, your line has a public IP.
+If they differ, your router is not directly on the internet:
+
+- a WAN IP from `100.64.` to `100.127.` means CGNAT: your provider shares one public IP among
+  several customers, and no forward can reach your home;
+- a WAN IP starting with `10.`, `172.16.` to `172.31.` or `192.168.` usually means another router
+  (often the provider's modem) sits in front of yours: a forward then has to be set on that one
+  too, or that one may itself be behind CGNAT.
+
 ## Troubleshooting
 
 ### Companion is not discovered
@@ -313,7 +386,9 @@ its installer again.
 ### Camera or card does not stream
 
 - Confirm TCP `8080` on the intercom is reachable from Home Assistant, and UDP `8555` (WebRTC ICE)
-  from the browser's network.
+  from the browser when it is on your home network.
+- Away from home, see [Remote access to the video](#remote-access-to-the-video): Home Assistant
+  remote access alone does not carry the video.
 - Confirm the official BTicino Door Entry app has been paired at least once: an empty
   `/etc/flexisip/users/users.db.txt` on the intercom means SIP/media provisioning is missing.
 
@@ -356,3 +431,5 @@ Pull requests target the `develop` branch; betas are published from `develop` be
 This integration is developed together with
 [BTicino GO Companion](https://github.com/abeilprincipino/BTicino-GO-Companion), since most features
 consume companion API capabilities directly.
+
+Originally started by [r0bb10](https://github.com/r0bb10).

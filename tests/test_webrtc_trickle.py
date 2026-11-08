@@ -128,6 +128,38 @@ class TrickleClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("session", client._webrtc_sessions)
         self.assertTrue(socket.closed)
 
+    async def test_a_source_failure_around_the_answer_reaches_its_listener(self) -> None:
+        def failure(message: str, session_id: str = "session") -> MagicMock:
+            return _text({"type": "source_failed", "id": session_id, "payload": {"session_id": session_id, "code": "source_failed", "message": message}})
+
+        socket = _ScriptedSocket()
+        socket.responses = {"offer": [failure("early"), _text(_ANSWER)], "candidate": [_text(_ACK)]}
+        client = _client(socket)
+        failures: list[str] = []
+
+        response = await client.async_webrtc_offer(
+            entrypoint_id="main", offer_sdp="offer", session_id="session", origin="bticino_card", on_candidate=MagicMock(), on_source_failed=failures.append
+        )
+        self.assertEqual(response["answer_sdp"], "answer")
+
+        socket.incoming.put_nowait(failure("late"))
+        socket.incoming.put_nowait(failure("another session", "other"))
+        await client.async_webrtc_candidate(session_id="session", candidate={"candidate": "browser"})
+
+        self.assertEqual(failures, ["early", "late"])
+        await client._async_webrtc_discard("session")
+
+    async def test_a_source_failure_without_a_listener_does_not_disturb_a_request(self) -> None:
+        socket = _ScriptedSocket()
+        failure = _text({"type": "source_failed", "id": "session", "payload": {"session_id": "session", "message": "refused"}})
+        socket.responses = {"offer": [failure, _text(_ANSWER)]}
+        client = _client(socket)
+
+        response = await self._offer(client, [])
+
+        self.assertEqual(response["answer_sdp"], "answer")
+        await client._async_webrtc_discard("session")
+
     async def test_a_failing_listener_does_not_stop_the_session(self) -> None:
         socket = _ScriptedSocket()
         socket.responses = {"offer": [_candidate("boom"), _text(_ANSWER)]}
@@ -167,6 +199,18 @@ class CandidateSubscriptionTest(unittest.TestCase):
         event = connection.send_message.call_args.args[0]
         self.assertEqual(event["id"], 7)
         self.assertEqual(event["event"], {"candidate": {"candidate": "one"}})
+
+    def test_subscription_forwards_a_source_failure_as_an_event(self) -> None:
+        camera = MagicMock()
+        hass = MagicMock(data={DATA_CAMERA_ENTITIES: {"camera.main": camera}})
+        connection = MagicMock(subscriptions={})
+
+        _handle_candidates(hass, connection, self._message())
+
+        camera.async_subscribe_card_webrtc_candidates.call_args.kwargs["on_source_failed"]("refused")
+        event = connection.send_message.call_args.args[0]
+        self.assertEqual(event["id"], 7)
+        self.assertEqual(event["event"], {"source_failed": "refused"})
 
     def test_unknown_camera_is_an_error(self) -> None:
         connection = MagicMock(subscriptions={})
