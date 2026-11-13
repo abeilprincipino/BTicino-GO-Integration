@@ -154,12 +154,21 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
 
         return [
             {
+                # The file name: what card_delete_ring_clip takes back.
+                "id": clip.path.name,
                 "recorded_at": clip.recorded_at.isoformat(),
                 "url": sign(clip.path),
                 "poster_url": sign(clip.poster) if clip.poster else None,
             }
             for clip in await archive.async_list(self._entrypoint_id, limit)
         ]
+
+    async def async_handle_card_delete_ring_clip(self, clip_id: str) -> None:
+        """Delete one archived ring clip of this entrypoint."""
+        archive = getattr(self._entry.runtime_data, "clip_archive", None)
+        if archive is None:
+            raise ValueError("Ring clips are not archived")
+        await archive.async_delete(self._entrypoint_id, clip_id)
 
     async def async_handle_async_webrtc_offer(
         self, offer_sdp: str, session_id: str, send_message: WebRTCSendMessage

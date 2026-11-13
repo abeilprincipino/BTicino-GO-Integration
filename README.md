@@ -240,7 +240,9 @@ answers and no card is open. The recording stops early when someone answers.
   offline at the ring, the clip is downloaded when it reconnects, unless another ring replaced it.
 - **Retention:** Settings › Devices & services › BTicino Companion › Configure › *Ring clip
   retention (days)*. Default 30; 0 keeps clips forever.
-- The intercom card shows the latest clips under its controls; tap one to play it. Set
+- The intercom card shows the latest clips under its controls; tap one to play it, and use the
+  trash button in the player to delete it (with its thumbnail). A deleted clip is not downloaded
+  again from the intercom, also after a restart. Set
   `clips: 0` to hide them, or another number up to 50:
 
   ```yaml

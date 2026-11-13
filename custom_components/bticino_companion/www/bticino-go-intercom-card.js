@@ -20,7 +20,9 @@ const CARD_STYLES = `
   .playback-bar { align-items: center; background: linear-gradient(rgba(0,0,0,.6), transparent); color: #fff; display: flex; font-size: 13px; font-weight: 500; justify-content: space-between; left: 0; padding: 8px 8px 22px 14px; pointer-events: none; position: absolute; right: 0; top: 0; }
   .round { align-items: center; background: rgba(0,0,0,.5); border: 0; border-radius: 50%; color: #fff; cursor: pointer; display: flex; justify-content: center; pointer-events: auto; }
   .round:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
-  .playback-close { height: 36px; width: 36px; } .playback-close ha-icon { --mdc-icon-size: 20px; }
+  .playback-actions { display: flex; gap: 8px; }
+  .playback-close, .playback-delete { height: 36px; width: 36px; } .playback-close ha-icon, .playback-delete ha-icon { --mdc-icon-size: 20px; }
+  .playback-delete:disabled { cursor: progress; opacity: .5; }
   .replay { height: 56px; position: absolute; width: 56px; } .replay ha-icon { --mdc-icon-size: 30px; }
   .playback-error { align-items: center; color: #ddd; display: flex; flex-direction: column; font-size: 14px; gap: 8px; position: absolute; } .playback-error ha-icon { --mdc-icon-size: 32px; }
   .clips { border-top: 1px solid var(--divider-color); padding: 4px 14px 14px; }
@@ -393,7 +395,7 @@ class BTicinoGoIntercomCard extends HTMLElement {
     // Muted for autoplay: the clip has no audio anyway.
     layer.innerHTML = `
       <video controls autoplay playsinline muted preload="auto"${poster} src="${this._escape(this._hass.hassUrl(clip.url))}"></video>
-      <div class="playback-bar"><span>${this._escape(day)} · ${this._escape(time)}</span><button class="round playback-close" title="Close" aria-label="Close clip"><ha-icon icon="mdi:close"></ha-icon></button></div>
+      <div class="playback-bar"><span>${this._escape(day)} · ${this._escape(time)}</span><div class="playback-actions">${clip.id ? `<button class="round playback-delete" title="Delete" aria-label="Delete clip"><ha-icon icon="mdi:delete"></ha-icon></button>` : ""}<button class="round playback-close" title="Close" aria-label="Close clip"><ha-icon icon="mdi:close"></ha-icon></button></div></div>
       <button class="round replay hidden" title="Replay" aria-label="Replay clip"><ha-icon icon="mdi:replay"></ha-icon></button>
       <div class="playback-error hidden"><ha-icon icon="mdi:video-off"></ha-icon><span>Clip unavailable</span></div>`;
     layer.classList.remove("hidden");
@@ -415,6 +417,32 @@ class BTicinoGoIntercomCard extends HTMLElement {
       video.play().catch(() => {});
     });
     layer.querySelector(".playback-close").addEventListener("click", () => this._closePlayback());
+    const remove = layer.querySelector(".playback-delete");
+    remove?.addEventListener("click", () => this._deleteClip(clip, remove));
+  }
+
+  // Deletes the clip in the player, after a confirmation. A clip from an older
+  // integration has no id and no delete button.
+  async _deleteClip(clip, button) {
+    const { day, time } = this._clipLabel(clip.recorded_at);
+    if (!window.confirm(`Delete the ring clip of ${day} ${time}?`)) return;
+    button.disabled = true;
+    try {
+      await this._send("bticino_companion/card_delete_ring_clip", { clip_id: clip.id });
+    } catch (err) {
+      button.disabled = false;
+      // Clip errors never mix with call errors: Home Assistant shows a toast.
+      this.dispatchEvent(new CustomEvent("hass-notification", {
+        detail: { message: `Unable to delete the clip: ${err?.message || err}` },
+        bubbles: true,
+        composed: true,
+      }));
+      return;
+    }
+    this._clips = this._clips.filter((item) => item.id !== clip.id);
+    if (this._playing === clip.recorded_at) this._closePlayback();
+    else this._renderClips();
+    this._loadClips().catch(() => {});
   }
 
   _closePlayback() {
