@@ -586,6 +586,7 @@ class CameraRingClipAttributeTest(unittest.IsolatedAsyncioTestCase):
 
         archive.async_list.assert_awaited_once_with("main", 5)
         self.assertEqual(clips[0], {
+            "id": "2026-10-26_09-30-00.mp4",
             "recorded_at": recorded.isoformat(),
             "url": "/media/local/2026-10-26_09-30-00.mp4?authSig=token-1",
             "poster_url": "/media/local/2026-10-26_09-30-00.jpg?authSig=token-1",

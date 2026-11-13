@@ -24,6 +24,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, _handle_call_answer)
     websocket_api.async_register_command(hass, _handle_call_hangup)
     websocket_api.async_register_command(hass, _handle_ring_clips)
+    websocket_api.async_register_command(hass, _handle_delete_ring_clip)
 
 
 def _camera_for_message(hass: HomeAssistant, msg: dict[str, Any]):
@@ -205,3 +206,22 @@ async def _handle_ring_clips(hass: HomeAssistant, connection, msg: dict[str, Any
         connection.send_error(msg["id"], "ring_clips_failed", str(err))
         return
     connection.send_result(msg["id"], {"clips": clips})
+
+
+@callback
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "bticino_companion/card_delete_ring_clip",
+        vol.Required("camera_entity_id"): str,
+        vol.Required("clip_id"): str,
+    }
+)
+@websocket_api.async_response
+async def _handle_delete_ring_clip(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Delete one ring clip of the card's camera, by the id the list gave."""
+    try:
+        await _camera_for_message(hass, msg).async_handle_card_delete_ring_clip(msg["clip_id"])
+    except (HomeAssistantError, ValueError) as err:
+        connection.send_error(msg["id"], "delete_ring_clip_failed", str(err))
+        return
+    connection.send_result(msg["id"])

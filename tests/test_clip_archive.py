@@ -19,6 +19,7 @@ try:
     from bticino_companion.clip_archive import RingClipArchiver
     from bticino_companion.const import CONF_CLIP_RETENTION_DAYS, EVENT_RING_CLIP_SAVED
     from bticino_companion.models import CompanionState, Diagnostics, Entrypoint, UpdateInfo
+    from homeassistant.exceptions import HomeAssistantError
     from homeassistant.util import dt as dt_util
 except ImportError as err:
     if "homeassistant" not in str(err):
@@ -243,6 +244,87 @@ class RingClipArchiverTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             archiver.url_path(clips[0].path), "/media/local/bticino_go/device_1/main/2026-10-26_09-32-00.mp4"
         )
+
+    def _clip(self, name: str, recorded: datetime, poster: bool = False) -> Path:
+        self.folder.mkdir(parents=True, exist_ok=True)
+        path = self.folder / name
+        path.write_bytes(b"x")
+        os.utime(path, (recorded.timestamp(), recorded.timestamp()))
+        if poster:
+            path.with_suffix(".jpg").write_bytes(b"x")
+        return path
+
+    async def test_deletes_a_clip_with_its_poster(self) -> None:
+        older = self._clip("a.mp4", RECORDED - timedelta(minutes=1))
+        newest = self._clip("b.mp4", RECORDED, poster=True)
+        archiver = self._archiver()
+        await archiver.async_start()
+        self.coordinator.async_update_listeners.reset_mock()
+
+        await archiver.async_delete("main", "b.mp4")
+
+        self.assertFalse(newest.exists())
+        self.assertFalse(newest.with_suffix(".jpg").exists())
+        self.assertTrue(older.exists())
+        # The newest clip is gone: the cameras advertise the one before it.
+        self.assertEqual(archiver.latest("main"), RECORDED - timedelta(minutes=1))
+        self.coordinator.async_update_listeners.assert_called_once_with()
+
+    async def test_deleting_the_last_clip_clears_the_newest_time(self) -> None:
+        self._clip("b.mp4", RECORDED)
+        archiver = self._archiver()
+        await archiver.async_start()
+
+        await archiver.async_delete("main", "b.mp4")
+
+        self.assertIsNone(archiver.latest("main"))
+        self.assertEqual(await archiver.async_list("main", 10), [])
+
+    async def test_a_deleted_clip_is_not_downloaded_again(self) -> None:
+        archiver = self._archiver()
+        await archiver.async_start()
+        await self._ring(archiver, ring_clip_recorded_at=RECORDED.isoformat())
+        await archiver.async_delete("main", f"{CLIP_NAME}.mp4")
+        self.client.async_entrypoint_clip_ring.reset_mock()
+
+        # A restart forgets what was checked; the Companion still has the clip.
+        restarted = self._archiver()
+        await restarted.async_start()
+        await self._ring(restarted, ring_clip_recorded_at=RECORDED.isoformat())
+
+        self.client.async_entrypoint_clip_ring.assert_not_called()
+        self.assertFalse((self.folder / f"{CLIP_NAME}.mp4").exists())
+
+        # The next ring is archived as usual.
+        await self._ring(restarted, ring_clip_recorded_at=(RECORDED + timedelta(minutes=5)).isoformat())
+        self.client.async_entrypoint_clip_ring.assert_awaited_once_with("main")
+
+    async def test_delete_refuses_anything_but_a_clip_in_the_folder(self) -> None:
+        self._clip("b.mp4", RECORDED, poster=True)
+        outside = self.media / "outside.mp4"
+        outside.write_bytes(b"x")
+        archiver = self._archiver()
+
+        for name in ("../../../outside.mp4", "b.jpg", ".deleted", "..", "sub/b.mp4"):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                await archiver.async_delete("main", name)
+        with self.assertRaises(HomeAssistantError):
+            await archiver.async_delete("main", "missing.mp4")
+        self.assertTrue(outside.exists())
+        self.assertTrue((self.folder / "b.jpg").exists())
+
+    async def test_purge_removes_an_expired_tombstone(self) -> None:
+        self.entry.options = {CONF_CLIP_RETENTION_DAYS: 7}
+        old = datetime.now(timezone.utc) - timedelta(days=8)
+        self._clip("old.mp4", old)
+        archiver = self._archiver()
+        # Deleted before the purge runs, so the tombstone is the only file left.
+        await archiver.async_delete("main", "old.mp4")
+        self.assertTrue((self.folder / ".deleted").exists())
+
+        await archiver.async_start()
+
+        self.assertFalse(self.folder.exists())
 
     async def test_publishes_the_newest_clip_at_start(self) -> None:
         self.folder.mkdir(parents=True)

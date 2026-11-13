@@ -19,6 +19,7 @@ from urllib.parse import quote
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util, slugify
 
@@ -37,6 +38,10 @@ _LOGGER = logging.getLogger(__name__)
 
 CLIP_SUFFIX = ".mp4"
 POSTER_SUFFIX = ".jpg"
+# An empty file in an entrypoint folder whose modification time is the newest
+# clip deleted by hand. The Companion keeps its last clip, so without it a
+# restart would download a deleted clip again.
+TOMBSTONE_NAME = ".deleted"
 NAME_FORMAT = "%Y-%m-%d_%H-%M-%S"
 FALLBACK_DEVICE_FOLDER = "companion"
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
@@ -141,6 +146,26 @@ class RingClipArchiver:
             _LOGGER.debug("Unable to list the ring clips of %s: %s", entrypoint_id, err)
             return []
 
+    async def async_delete(self, entrypoint_id: str, name: str) -> None:
+        """Delete one clip of an entrypoint, by file name, with its poster."""
+        folder = self._folder(entrypoint_id)
+        if folder is None:
+            raise HomeAssistantError(f"Entrypoint {entrypoint_id!r} has no ring clips")
+        try:
+            await self._hass.async_add_executor_job(_delete_clip, folder, name)
+            clips = await self._hass.async_add_executor_job(_clips_in, folder)
+        except OSError as err:
+            raise HomeAssistantError(f"Unable to delete the ring clip {name}: {err}") from err
+        # The newest clip may be the one deleted: the cameras advertise the new
+        # newest, and the cards reload their list.
+        latest = datetime.fromtimestamp(max(modified for modified, _ in clips), timezone.utc) if clips else None
+        if latest != self._latest.get(folder.name):
+            if latest is None:
+                self._latest.pop(folder.name, None)
+            else:
+                self._latest[folder.name] = latest
+            self._coordinator.async_update_listeners()
+
     def url_path(self, path: Path) -> str:
         """The path Home Assistant serves an archived file at, before signing."""
         return "/media/local/" + quote(path.relative_to(self._media_root).as_posix())
@@ -190,7 +215,10 @@ class RingClipArchiver:
             except OSError as err:
                 _LOGGER.warning("Unable to check the ring clip archive of %s: %s", entrypoint.id, err)
                 return
-            if exists:
+            deleted_until = await self._hass.async_add_executor_job(_mtime, folder / TOMBSTONE_NAME)
+            # A clip deleted by hand stays deleted. The tolerance covers the float
+            # round trip of the modification time; rings are seconds apart.
+            if exists or (deleted_until is not None and recorded.timestamp() <= deleted_until + 1):
                 self._checked[entrypoint.id] = recorded
                 return
             try:
@@ -347,10 +375,30 @@ def _list_clips(folder: Path, limit: int) -> list[ArchivedClip]:
     return result
 
 
+def _delete_clip(folder: Path, name: str) -> None:
+    # Only a clip file directly inside the folder: never a path, a hidden file or a poster.
+    if Path(name).name != name or name.startswith(".") or not name.endswith(CLIP_SUFFIX):
+        raise ValueError(f"Invalid ring clip name {name!r}")
+    clip = folder / name
+    modified = _mtime(clip)
+    if modified is None:
+        raise HomeAssistantError(f"Ring clip {name} not found")
+    # The tombstone first: if the deletion fails half way, the clip is at worst
+    # not downloaded again, never resurrected.
+    tombstone = folder / TOMBSTONE_NAME
+    current = _mtime(tombstone)
+    if current is None or modified > current:
+        tombstone.touch()
+        os.utime(tombstone, (modified, modified))
+    clip.unlink(missing_ok=True)
+    clip.with_suffix(POSTER_SUFFIX).unlink(missing_ok=True)
+
+
 def _purge(root: Path, cutoff: float) -> None:
     for folder in _entries(root):
         for path in _entries(folder):
-            if path.suffix not in (CLIP_SUFFIX, POSTER_SUFFIX):
+            # A tombstone past retention is not needed: an expired clip is never downloaded.
+            if path.suffix not in (CLIP_SUFFIX, POSTER_SUFFIX) and path.name != TOMBSTONE_NAME:
                 continue
             modified = _mtime(path)
             if modified is not None and modified < cutoff:
