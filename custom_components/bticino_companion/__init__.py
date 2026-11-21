@@ -12,6 +12,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.typing import ConfigType
 
 from .api import CompanionApiClient, CompanionAuthError
 from .clip_archive import RingClipArchiver
@@ -29,8 +31,11 @@ from .const import (
 )
 from .coordinator import CompanionCoordinator
 from .dynamic_entities import DynamicEntityManager
+from .services import async_register_services
 from .websocket import CompanionWebSocketError
 from .websocket_api import async_register_websocket_commands
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 @dataclass(slots=True)
@@ -46,6 +51,12 @@ class IntegrationRuntime:
         """Move the live transports to a newly discovered Companion address."""
         self.client.update_base_url(base_url)
         await self.coordinator.async_update_base_url(base_url)
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the actions, so automations validate even while no Companion is loaded."""
+    async_register_services(hass)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

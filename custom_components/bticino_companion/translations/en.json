@@ -104,7 +104,21 @@
     "event": {
       "openwebnet_trace": {
         "state_attributes": {
-          "frame": {"name": "Frame"}
+          "frame": {
+            "name": "Frame"
+          }
+        }
+      }
+    }
+  },
+  "services": {
+    "hangup_call": {
+      "name": "Hang up call",
+      "description": "Rejects the call that is ringing, or ends the one in progress, and closes it on the intercom bus, like the hang-up key on the intercom. Does nothing when no call is up.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Companion",
+          "description": "The Companion whose call to end. Optional when only one Companion is set up."
         }
       }
     }

@@ -1,0 +1,7 @@
+hangup_call:
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: bticino_companion
