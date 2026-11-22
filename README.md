@@ -224,6 +224,25 @@ the call is answered or declined once the card has loaded, exactly as with its b
 opened after the call stopped ringing (answered elsewhere, declined, timed out) does nothing. The
 parameter is removed from the address once read, so reloading the page does not act again.
 
+To decline without opening the app, call the action `bticino_companion.hangup_call` from a
+notification action instead. It declines the ringing call (or ends the one in progress) and closes
+it on the intercom bus, like the intercom's hang-up key, so the next ring is not answered with
+*busy*. It does nothing when no call is up. With several Companions, set `config_entry_id`.
+
+```yaml
+automation:
+  - alias: Decline the doorbell from a notification
+    triggers:
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: DECLINE_DOORBELL
+    actions:
+      - action: bticino_companion.hangup_call
+```
+
+The notification then carries `- action: DECLINE_DOORBELL` / `title: Decline` among its actions.
+
 ## Ring clips
 
 On every doorbell ring the Companion records the first 15 seconds of video, also when nobody
