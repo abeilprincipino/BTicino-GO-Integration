@@ -452,9 +452,9 @@ class TypedControlTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             camera.extra_state_attributes["bticino_unlocks"],
             [
-                {"id": "main", "label": "Ingresso"},
-                {"id": "luci", "label": "Luci"},
-                {"id": "cancello", "label": "cancello"},
+                {"id": "main", "label": "Ingresso", "camera": True},
+                {"id": "luci", "label": "Luci", "camera": False},
+                {"id": "cancello", "label": "cancello", "camera": False},
             ],
         )
 
