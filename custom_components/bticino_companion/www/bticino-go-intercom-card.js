@@ -586,7 +586,9 @@ class BTicinoGoIntercomCard extends HTMLElement {
         this._attachVideo();
       };
       pc.onicecandidate = ({ candidate }) => {
-        if (!candidate) return;
+        // Some browsers (Firefox) end gathering with an empty candidate instead
+        // of null. It carries nothing to send, and the companion rejects it.
+        if (!candidate?.candidate) return;
         const payload = this._candidatePayload(candidate);
         if (this._offerAccepted) {
           this._sendCandidate(payload).catch((err) => {
@@ -636,7 +638,11 @@ class BTicinoGoIntercomCard extends HTMLElement {
       await pc.setRemoteDescription({ type: "answer", sdp: response.answer_sdp });
       if (this._sessionId !== sessionId) return;
       this._remoteCandidates.splice(0).forEach((candidate) => this._addRemoteCandidate(pc, candidate));
-      await Promise.all(this._queuedCandidates.splice(0).map((candidate) => this._sendCandidate(candidate)));
+      // As for a candidate trickled later, one the companion rejects is not a
+      // failed session: the others may already have connected it.
+      await Promise.all(this._queuedCandidates.splice(0).map((candidate) => this._sendCandidate(candidate).catch((err) => {
+        console.warn("bticino-go-intercom-card: failed to send ICE candidate", err);
+      })));
       if (this._sessionId !== sessionId) return;
       this._attachVideo();
     } catch (err) {
