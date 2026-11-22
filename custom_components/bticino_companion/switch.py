@@ -41,6 +41,8 @@ class _CompanionSwitch(CompanionAvailabilityMixin, CoordinatorEntity[CompanionCo
 
 
 class CompanionMuteSwitch(_CompanionSwitch):
+    _requires_intercom = True
+
     def __init__(self, entry: ConfigEntry, coordinator: CompanionCoordinator, client) -> None:
         super().__init__(entry, coordinator, "mute", "Mute", "mdi:microphone-off")
         self._client = client
@@ -59,6 +61,8 @@ class CompanionMuteSwitch(_CompanionSwitch):
 
 
 class CompanionVoicemailSwitch(_CompanionSwitch):
+    _requires_intercom = True
+
     def __init__(self, entry: ConfigEntry, coordinator: CompanionCoordinator, client) -> None:
         super().__init__(entry, coordinator, "voicemail", "Voicemail", "mdi:voicemail")
         self._client = client

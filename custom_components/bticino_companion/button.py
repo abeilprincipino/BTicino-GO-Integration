@@ -51,6 +51,7 @@ class CompanionEntrypointButton(_CompanionButton):
     """Run a fixed entrypoint-scoped v3 command."""
 
     _attr_entity_category = None
+    _requires_intercom = True
 
     def __init__(
         self,

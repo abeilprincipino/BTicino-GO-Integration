@@ -177,6 +177,10 @@ class CompanionState:
     firmware: str | None = None
     hardware: str | None = None
     diagnostics: Diagnostics = Diagnostics()
+    # Why the intercom firmware does not answer ("firmware_reload",
+    # "unreachable"); None while it does, and from a Companion that does not
+    # report it.
+    intercom_unavailable: str | None = None
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "CompanionState":
@@ -231,6 +235,7 @@ class CompanionState:
             firmware=diagnostics.firmware or _optional_string(device.get("firmware", payload.get("firmware"))),
             hardware=diagnostics.hardware or _optional_string(device.get("hardware", payload.get("hardware"))),
             diagnostics=diagnostics,
+            intercom_unavailable=_optional_string(payload.get("intercom_unavailable")),
         )
 
 

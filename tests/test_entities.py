@@ -17,6 +17,7 @@ sys.path.insert(0, str(COMPONENT_PATH))
 
 try:
     from homeassistant.const import EntityCategory
+    from bticino_companion.binary_sensor import CompanionRingingBinarySensor
     from bticino_companion.button import CompanionEntrypointButton, CompanionRebootButton, CompanionServiceRestartButton
     from bticino_companion.camera import CompanionEntrypointCamera
     from bticino_companion.clip_archive import ArchivedClip
@@ -142,6 +143,46 @@ class TypedControlTest(unittest.IsolatedAsyncioTestCase):
         entry.runtime_data.client.async_set_muted.assert_any_await(False)
         entry.runtime_data.client.async_set_voicemail_enabled.assert_any_await(True)
         entry.runtime_data.client.async_set_voicemail_enabled.assert_any_await(False)
+
+    async def test_intercom_entities_are_unavailable_while_the_intercom_restarts(self) -> None:
+        entry = _MockEntry()
+        main = Entrypoint.from_dict(
+            {
+                "id": "main",
+                "label": "Main Gate",
+                "capabilities": {"stream": True, "unlock": True},
+                "availability": {"unlock": True},
+            }
+        )
+        coordinator = _coordinator(_state(entrypoints=(main,)))
+        client = entry.runtime_data.client
+        needs_intercom = [
+            CompanionEntrypointButton(entry, coordinator, client, "main", "Main Gate"),
+            CompanionEntrypointCamera(entry, coordinator, client, "main", "Main Gate"),
+            CompanionMuteSwitch(entry, coordinator, client),
+            CompanionVoicemailSwitch(entry, coordinator, client),
+            CompanionRingingBinarySensor(entry, coordinator),
+        ]
+        reboot = CompanionRebootButton(entry, coordinator, client)
+
+        for entity in needs_intercom:
+            self.assertTrue(entity.available, type(entity).__name__)
+
+        coordinator.data = _state(entrypoints=(main,), intercom_unavailable="firmware_reload")
+
+        for entity in needs_intercom:
+            self.assertFalse(entity.available, type(entity).__name__)
+
+        # The Companion itself still answers: what does not go through the
+        # intercom stays available.
+        self.assertTrue(reboot.available)
+
+    def test_state_reads_the_intercom_unavailable_reason(self) -> None:
+        self.assertIsNone(CompanionState.from_dict({}).intercom_unavailable)
+        self.assertEqual(
+            CompanionState.from_dict({"intercom_unavailable": "firmware_reload"}).intercom_unavailable,
+            "firmware_reload",
+        )
 
     async def test_update_uses_typed_rest_client(self) -> None:
         entry = _MockEntry()

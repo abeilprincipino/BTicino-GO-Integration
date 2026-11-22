@@ -46,6 +46,7 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
     """Expose one Companion WebRTC camera per stream-capable entrypoint."""
 
     _attr_has_entity_name = True
+    _requires_intercom = True
     _attr_force_update = True
     _attr_icon = "mdi:video"
     _attr_supported_features = CameraEntityFeature.STREAM
