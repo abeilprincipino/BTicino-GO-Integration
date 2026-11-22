@@ -12,6 +12,7 @@ const CARD_STYLES = `
   .live { display: grid; inset: 0; place-items: center; position: absolute; }
   .playback { background: #111; display: grid; inset: 0; place-items: center; position: absolute; z-index: 1; }
   .live img, .live video { width: 100%; height: 100%; object-fit: cover; } .placeholder { color: #aaa; } .hidden { display: none !important; }
+  .unavailable-overlay { align-items: center; background: rgba(0,0,0,.65); color: #fff; display: flex; flex-direction: column; gap: 6px; inset: 0; justify-content: center; padding: 16px; position: absolute; text-align: center; } .unavailable-overlay .hint { font-size: 12px; opacity: .8; }
   .ring-overlay { align-items: center; background: rgba(0,0,0,.55); color: #fff; display: flex; flex-direction: column; gap: 8px; inset: 0; justify-content: center; position: absolute; }
   .ring-pulse { animation: pulse 1.2s ease-in-out infinite; background: #f9a825; border-radius: 50%; height: 20px; width: 20px; } .ring-label { font-size: 16px; font-weight: 600; }
   .controls { display: flex; flex-wrap: wrap; justify-content: center; gap: 16px; padding: 14px; } .controls button { align-items: center; border: 0; border-radius: 50%; color: #fff; cursor: pointer; display: flex; height: 52px; justify-content: center; width: 52px; } .controls button:disabled { cursor: not-allowed; opacity: .4; } .controls button ha-icon { --mdc-icon-size: 26px; }
@@ -873,7 +874,14 @@ class BTicinoGoIntercomCard extends HTMLElement {
     // A ringing SIP call can be refused. The companion answers it 603 Decline,
     // which ends every fork of the doorbell call, the indoor unit's included.
     const canDecline = this._canAnswer() && !canEnd;
-    const status = this._leftForElsewhere && inCall
+    // The camera is unavailable while the intercom firmware restarts (the
+    // reload after a ringer unmute) or the Companion is unreachable. Its
+    // attributes, the lock list included, are gone then: offer no button
+    // that could only fail, and say why.
+    const unavailable = this._cameraState()?.state === "unavailable";
+    const status = unavailable
+      ? ["Unavailable", "idle"]
+      : this._leftForElsewhere && inCall
       ? ["In a call on another device", "active"]
       : this._elsewhereUntil
       ? ["Answered elsewhere", "idle"]
@@ -897,13 +905,14 @@ class BTicinoGoIntercomCard extends HTMLElement {
         <img class="${active || !snapshot ? "hidden" : ""}" src="${this._escape(snapshot)}" alt="${this._escape(name)}" />
         <div class="placeholder ${active || snapshot ? "hidden" : ""}">No snapshot available</div>
         <video class="${this._connected && this._videoFlowing ? "" : "hidden"}" playsinline autoplay></video>
-        <div class="ring-overlay ${ringing && !active ? "" : "hidden"}"><div class="ring-pulse"></div><div class="ring-label">${this._escape(entrypoint)}</div><div>Incoming call</div></div>`;
+        <div class="ring-overlay ${ringing && !active ? "" : "hidden"}"><div class="ring-pulse"></div><div class="ring-label">${this._escape(entrypoint)}</div><div>Incoming call</div></div>
+        <div class="unavailable-overlay ${unavailable ? "" : "hidden"}"><ha-icon icon="mdi:timer-sand"></ha-icon><div>Intercom unavailable</div><div class="hint">It is restarting or unreachable. The controls come back when it answers.</div></div>`;
     root.querySelector(".bottom").innerHTML = `<div class="controls">
-        <button class="call ${(active && !this._preview) || (ringing && !canAnswer) || (this._leftForElsewhere && inCall) ? "hidden" : ""}" title="${canAnswer ? "Answer" : "Start live view"}"><ha-icon icon="mdi:phone"></ha-icon></button>
+        <button class="call ${unavailable || (active && !this._preview) || (ringing && !canAnswer) || (this._leftForElsewhere && inCall) ? "hidden" : ""}" title="${canAnswer ? "Answer" : "Start live view"}"><ha-icon icon="mdi:phone"></ha-icon></button>
         <button class="decline ${canDecline ? "" : "hidden"}" title="Decline" aria-label="Decline call"><ha-icon icon="mdi:phone-hangup"></ha-icon></button>
         <button class="end ${canEnd ? "" : "hidden"}" title="${inCall ? "Hang up" : "End live view"}"><ha-icon icon="mdi:phone-hangup"></ha-icon></button>
         <button class="mute ${this._connected && this._micTrack ? "" : "hidden"}" title="${this._muted ? "Unmute" : "Mute"}"><ha-icon icon="${this._muted ? "mdi:microphone-off" : "mdi:microphone"}"></ha-icon></button>
-        ${this._unlockButtons().map((unlock) => `<button class="unlock" data-entrypoint="${this._escape(unlock.id)}" title="${this._escape(unlock.name)}" aria-label="${this._escape(unlock.name)}"><ha-icon icon="${this._escape(unlock.icon)}"></ha-icon></button>`).join("")}
+        ${(unavailable ? [] : this._unlockButtons()).map((unlock) => `<button class="unlock" data-entrypoint="${this._escape(unlock.id)}" title="${this._escape(unlock.name)}" aria-label="${this._escape(unlock.name)}"><ha-icon icon="${this._escape(unlock.icon)}"></ha-icon></button>`).join("")}
        </div><div class="error ${this._error ? "" : "hidden"}">${this._escape(this._error)}</div>`;
     this.shadowRoot.querySelector(".call")?.addEventListener("click", () => (canAnswer ? this._answer() : this._start()));
     this.shadowRoot.querySelector(".decline")?.addEventListener("click", () => this._hangup());

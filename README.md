@@ -154,6 +154,11 @@ unlocks:
 What the card does:
 
 - Shows the latest snapshot while idle.
+- **Intercom unavailable**: while the intercom firmware restarts (for example the reload that
+  follows a ringer unmute, about 25 s) or the Companion cannot reach it, the doors, cameras, ringer,
+  voicemail and Ringing sensor are unavailable in Home Assistant, and the card shows "Intercom
+  unavailable" without call or unlock buttons. Needs a Companion that reports
+  `intercom_unavailable`; with an older one, nothing changes.
 - **Live view** (green phone button): opens a WebRTC session through Home Assistant and shows the
   live video with audio.
 - **Incoming call**: shows a ringing overlay and a muted ringing preview. The green button answers

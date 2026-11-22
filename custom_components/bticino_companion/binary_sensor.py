@@ -26,6 +26,8 @@ class CompanionRingingBinarySensor(CompanionAvailabilityMixin, CoordinatorEntity
 
     _attr_has_entity_name = True
     _attr_name = "Ringing"
+    # Without the bus no ring can be seen.
+    _requires_intercom = True
     _attr_icon = "mdi:bell-ring"
 
     def __init__(self, entry: ConfigEntry, coordinator: CompanionCoordinator) -> None:
