@@ -132,11 +132,13 @@ name: Front Door
 | `camera` | yes | The companion camera entity of the entrypoint to show. |
 | `name` | no | Card title. Defaults to the camera's friendly name. |
 | `clips` | no | Number of recent ring clips shown under the controls, 0–50 (default 10). 0 hides them. |
-| `unlocks` | no | Per-lock overrides, keyed by entrypoint id: `icon`, `name` (button tooltip) and `hide: true`. |
+| `unlocks` | no | Per-lock overrides, keyed by entrypoint id: `icon`, `name` (button tooltip) and `hide`. |
 
-The card shows one unlock button for every entrypoint of the intercom that can unlock, not only
-the camera's own, in the order the Companion lists them. Each defaults to `mdi:lock-open` and the
-entrypoint label:
+The card shows one unlock button for the camera's own entrypoint and for every other entrypoint of
+the intercom that can unlock but has no camera (lights, a gate), in the order the Companion lists
+them. The lock of another entrypoint with a camera is left to that camera's card, so a card never
+opens a door it does not show; `hide: false` adds it back, `hide: true` hides any lock. Each
+defaults to `mdi:lock-open` and the entrypoint label:
 
 ```yaml
 type: custom:bticino-go-intercom-card

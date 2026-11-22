@@ -123,8 +123,10 @@ class CompanionEntrypointCamera(CompanionAvailabilityMixin, CoordinatorEntity[Co
             ),
             # Every lock of this intercom, in the Companion's order: the card
             # offers one button each, not just this camera's own entrypoint.
+            # "camera" marks the locks of entrypoints with a camera of their
+            # own, whose button the card leaves to that camera's card.
             "bticino_unlocks": [
-                {"id": item.id, "label": item.label or item.id}
+                {"id": item.id, "label": item.label or item.id, "camera": bool(item.capabilities.stream)}
                 for item in (state.entrypoints if state else ())
                 if item.capabilities.unlock
             ],

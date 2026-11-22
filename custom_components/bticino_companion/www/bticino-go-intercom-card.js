@@ -686,11 +686,20 @@ class BTicinoGoIntercomCard extends HTMLElement {
   // One button per lock of the intercom, as the camera lists them, with the
   // card's icon, name and hide overrides. A camera from an older integration
   // has no list: it keeps the single button for its own entrypoint.
+  // The lock of another entrypoint with a camera of its own belongs on that
+  // camera's card: a second door button here is easy to press by mistake,
+  // opening a door the card does not show. hide: false shows it anyway.
   _unlockButtons() {
-    const listed = this._cameraState()?.attributes?.bticino_unlocks;
+    const attributes = this._cameraState()?.attributes;
+    const listed = attributes?.bticino_unlocks;
     if (!Array.isArray(listed)) return [{ id: "", name: "Unlock", icon: "mdi:lock-open" }];
+    const own = attributes.bticino_entrypoint_id;
+    const shown = (item) => {
+      const hide = this._config.unlocks[item.id]?.hide;
+      return hide === undefined ? item.id === own || !item.camera : !hide;
+    };
     return listed
-      .filter((item) => item && item.id && !this._config.unlocks[item.id]?.hide)
+      .filter((item) => item && item.id && shown(item))
       .map((item) => {
         const custom = this._config.unlocks[item.id] || {};
         return { id: item.id, name: custom.name || item.label || item.id, icon: custom.icon || "mdi:lock-open" };
